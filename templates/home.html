@@ -1,0 +1,52 @@
+{% extends 'base.html' %}
+{% block title %}화재 영상 검사{% endblock %}
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('static', filename='inspection.css') }}">
+<section class="inspection">
+  <div class="dashboard-head"><div><span class="eyebrow">AI FIRE DETECTION</span><h1>영상 화재 검사</h1><p class="muted">YOLO 모델로 영상 속 화재와 연기를 탐지합니다.</p></div><div class="user-box"><strong>{{ user.username }}</strong><span>{{ user.role }}</span><form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ session['csrf_token'] }}"><button class="ghost-button" type="submit">로그아웃</button></form></div></div>
+  {% for message in get_flashed_messages() %}<div class="error" role="alert">{{ message }}</div>{% endfor %}
+  <div class="inspection-grid">
+    <article class="upload-card">
+      <h2>검사할 영상 선택</h2><p class="muted">MP4, AVI, MOV, MKV, WEBM, M4V · 최대 500MB</p>
+      <form id="inspection-form" method="post" action="{{ url_for('inspect') }}" enctype="multipart/form-data">
+        <input type="hidden" name="csrf_token" value="{{ session['csrf_token'] }}">
+        <label class="file-picker" for="video"><span class="file-icon">▶</span><strong>영상 파일 선택</strong><small>파일을 선택하면 아래에서 검사할 수 있습니다.</small></label>
+        <input class="file-input" id="video" name="video" type="file" accept="video/mp4,video/x-msvideo,video/quicktime,video/x-matroska,video/webm,.m4v">
+        <label for="youtube-url">또는 YouTube 영상 주소</label>
+        <input id="youtube-url" name="youtube_url" type="url" placeholder="https://www.youtube.com/watch?v=..." style="width:100%;box-sizing:border-box;margin:10px 0;padding:12px">
+        <p class="processing-note">공개된 녹화 영상 · 최대 30분 / 500MB / 720p. 주소 입력 시 해당 영상을 검사합니다.</p>
+        <button id="inspect-button" type="submit">검사 시작 <span aria-hidden="true">→</span></button>
+      </form>
+      <p class="processing-note">영상 길이와 PC 성능에 따라 검사에 시간이 걸릴 수 있습니다. 완료될 때까지 이 창을 닫지 마세요.</p>
+    </article>
+    <article class="result-card">
+      {% if job_token %}
+      <div class="live-head"><div><span class="live-dot"></span><strong>실시간 AI 검사 중</strong></div><div class="live-actions"><strong id="live-progress">0%</strong><form id="stop-inspection-form" method="post" action="{{ url_for('inspection_stop', token=job_token) }}"><input type="hidden" name="csrf_token" value="{{ session['csrf_token'] }}"><button id="stop-inspection-button" class="stop-button" type="submit">여기까지 검사 종료</button></form></div></div>
+      <div class="live-video"><img id="live-image" {% if current_job.status == 'pending' %}src="{{ url_for('inspection_stream', token=job_token) }}"{% endif %} alt="YOLO 실시간 화재 탐지 화면"></div>
+      <p class="processing-note">분석된 프레임이 바로 표시됩니다. 완료되면 결과 요약 화면으로 자동 전환됩니다.</p>
+      <p id="vlm-live-status" role="status">AI 후보 감지를 기다리고 있습니다.</p>
+      <div id="stream-config" data-stream-url="{{ url_for('inspection_stream', token=job_token) }}" data-status-url="{{ url_for('inspection_status', token=job_token) }}"></div>
+      {% elif report %}
+      {% if report.source_url %}<p><a href="{{ report.source_url }}" target="_blank" rel="noopener">YouTube 원본 영상</a></p>{% endif %}
+      <p class="processing-note">VLM 판정은 응답 도착 시점부터 표시됩니다. 마지막 1초는 최종 판정 확인용 정지 화면입니다.</p>
+      {% if report.stopped_early %}<div class="notice">사용자가 검사를 종료했습니다. 종료 지점까지의 결과입니다.</div>{% endif %}
+      <div class="result-title"><div><span class="status {{ 'danger' if report.has_alert else 'safe' }}">{{ '화재·연기 감지' if report.has_alert else '이상 없음' }}</span><h2>검사 결과</h2></div><strong class="confidence">{{ report.max_alert_confidence }}%<small>최고 감지 신뢰도</small></strong></div>
+      <p class="confidence-help">영상 전체에서 AI가 불 또는 연기라고 가장 확실하게 판단한 탐지 결과입니다. 실제 화재 확률을 뜻하지는 않습니다.</p>
+      <video controls preload="metadata" src="{{ url_for('inspection_result', filename=report.result_name) }}">결과 영상을 재생할 수 없습니다.</video>
+      {% if report.evidence_names %}<div class="evidence-grid">{% for image_name in report.evidence_names %}<figure><img src="{{ url_for('inspection_result', filename=image_name) }}" alt="VLM 판단용 주요 장면 {{ loop.index }}"><figcaption>주요 장면 {{ loop.index }}</figcaption></figure>{% endfor %}</div>{% endif %}
+      {% if report.vlm_result %}<div class="vlm-summary"><strong>VLM 2차 판정: {{ {'confirmed':'실제 화재/연기', 'false_alarm':'오탐', 'uncertain':'판단 불확실', 'error':'분석 오류'}.get(report.vlm_result, '분석 중') }}</strong><p class="vlm-evidence">{{ report.vlm_answer }}</p></div>{% endif %}
+      <div class="stats"><div><strong>{{ report.class_counts.fire }}</strong><span>화재 탐지</span></div><div><strong>{{ report.class_counts.smoke }}</strong><span>연기 탐지</span></div><div><strong>{{ report.alert_frames }}</strong><span>위험 프레임</span></div><div><strong>{{ report.duration_seconds }}s</strong><span>영상 길이</span></div></div>
+      <a class="download-link" href="{{ url_for('inspection_result', filename=report.result_name) }}" download>탐지 결과 영상 다운로드</a>
+      {% else %}
+      <div class="empty-result"><span>⌁</span><h2>검사 결과가 여기에 표시됩니다</h2><p>왼쪽에서 영상을 선택하고 검사를 시작하세요.</p></div>
+      {% endif %}
+    </article>
+  </div>
+  <section id="event-board" class="event-board">
+    <div class="event-board-head"><div><span class="eyebrow">EVENT BOARD</span><h2>화재 이벤트</h2></div><span>최근 20건</span></div>
+    <div id="event-board-config" data-rows-url="{{ url_for('event_board_rows') }}"></div>
+    <div class="event-table-wrap"><table class="event-table"><thead><tr><th>이벤트 ID</th><th>감지 일시</th><th>모니터링</th><th>YOLO</th><th>DINO</th><th>VLM 2차 판정</th><th>상태</th><th>처리</th></tr></thead><tbody id="event-rows">{% include '_event_rows.html' %}</tbody></table></div>
+  </section>
+</section>
+<script src="{{ url_for('static', filename='inspection.js') }}"></script>
+{% endblock %}

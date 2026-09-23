@@ -1,0 +1,16 @@
+{% if events %}
+  {% for event in events %}
+  <tr>
+    <td><strong>EVT-{{ event.detected_at.strftime('%Y%m%d') }}-{{ '%06d'|format(event.event_id) }}</strong></td>
+    <td>{{ event.detected_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+    <td><span class="monitor-state {{ event.event_state|lower }}">{{ '감지 중' if event.event_state == 'ACTIVE' else '종료' }}</span><small>영상 {{ '%.1f'|format(event.video_started_seconds or 0) }}~{{ '%.1f'|format(event.video_last_seen_seconds or 0) }}초 · {{ event.detection_count or 0 }}회</small></td>
+    <td><strong class="yolo-score">{{ event.yolo_confidence or 0 }}%</strong></td>
+    <td><span class="dino-result {{ 'passed' if event.dino_passed else 'blocked' }}">{{ '통과' if event.dino_passed else '기록 없음' }}</span>{% if event.dino_passed %}<small>불 {{ event.dino_fire_score or 0 }}% · 연기 {{ event.dino_smoke_score or 0 }}%</small><details class="vlm-details"><summary>전체 점수</summary><pre>fire: {{ event.dino_fire_score or 0 }}%\nsmoke: {{ event.dino_smoke_score or 0 }}%\nlights: {{ event.dino_light_score or 0 }}%\nclouds: {{ event.dino_cloud_score or 0 }}%\nthreshold: {{ (event.dino_threshold or 0) * 100 }}%</pre></details>{% endif %}{% if event.evidence_urls %}<small class="evidence-links">{% for image_url in event.evidence_urls %}<a href="{{ image_url }}" target="_blank" rel="noopener">사진 {{ loop.index }}</a>{% endfor %}</small>{% endif %}</td>
+    <td><span class="vlm-result {{ event.vlm_result or 'pending' }}">{{ {'confirmed':'실제 화재/연기', 'false_alarm':'오탐', 'uncertain':'판단 불확실', 'error':'분석 오류'}.get(event.vlm_result, '분석 중') }}</span>{% if event.vlm_answer %}<p class="vlm-evidence">{{ event.vlm_answer }}</p>{% endif %}{% if event.vlm_prompt %}<details class="vlm-details"><summary>판단 기준·응답 보기</summary><strong>VLM 원문 응답</strong><pre>{{ event.english_answer or event.vlm_answer or '분석 중' }}</pre><strong>프롬프트 ({{ event.vlm_prompt_version }})</strong><pre>{{ event.vlm_prompt }}</pre>{% if event.request_history %}<strong>요청 이력</strong><pre>{{ event.request_history }}</pre>{% endif %}</details>{% endif %}</td>
+    <td><span class="event-status {{ 'received' if event.status == 'RECEIVED' else 'unreceived' }}">{{ '접수' if event.status == 'RECEIVED' else '미접수' }}</span>{% if event.accepted_by_username %}<small>{{ event.accepted_by_username }} · {{ event.accepted_at.strftime('%H:%M:%S') }}</small>{% endif %}</td>
+    <td>{% if event.status == 'UNRECEIVED' %}<form method="post" action="{{ url_for('accept_event', event_id=event.event_id) }}"><input type="hidden" name="csrf_token" value="{{ session['csrf_token'] }}"><button class="accept-button" type="submit">접수</button></form>{% else %}<span class="done-mark">처리됨</span>{% endif %}</td>
+  </tr>
+  {% endfor %}
+{% else %}
+  <tr><td colspan="8"><div class="event-empty">아직 감지된 이벤트가 없습니다.</div></td></tr>
+{% endif %}
