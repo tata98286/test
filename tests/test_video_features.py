@@ -11,6 +11,14 @@ from vlm_display import overlay, STATES
 
 
 class VideoFeaturesTest(unittest.TestCase):
+    def test_human_review_requires_verdict_and_limits_notes(self):
+        self.assertEqual(module.parse_human_review({'human_verdict':'fire', 'human_notes':'불꽃 확인'}),
+                         ('FIRE', '불꽃 확인'))
+        with self.assertRaises(ValueError):
+            module.parse_human_review({'human_verdict':'', 'human_notes':''})
+        with self.assertRaises(ValueError):
+            module.parse_human_review({'human_verdict':'FIRE', 'human_notes':'가' * 501})
+
     def test_fire_or_smoke_can_enter_event_pipeline(self):
         self.assertTrue(module.matches_yolo_condition({'fire'}, 'or'))
         self.assertTrue(module.matches_yolo_condition({'smoke'}, 'or'))

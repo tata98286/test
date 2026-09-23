@@ -105,11 +105,14 @@ if (eventBoardConfig && eventRows) {
         method: 'POST', body: new FormData(acceptForm),
         headers: {'Accept': 'application/json'},
       });
-      if (!response.ok || response.redirected || !(await response.json()).ok) throw new Error('accept failed');
+      const result = await response.json();
+      if (!response.ok || response.redirected || !result.ok) throw new Error(result.error || 'accept failed');
       acceptButton.textContent = '접수 완료';
+      const details = acceptForm.closest('details');
+      if (details) details.open = false;
     } catch (error) {
       acceptButton.disabled = false;
-      window.alert('접수하지 못했습니다. 연결 상태를 확인하고 다시 시도해 주세요.');
+      window.alert(error.message || '접수하지 못했습니다. 연결 상태를 확인하고 다시 시도해 주세요.');
     } finally {
       accepting = false;
     }

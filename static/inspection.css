@@ -150,6 +150,17 @@ button:disabled {
 .event-status.received { color: #23744a; background: #e7f7ef; }
 .accept-button { width: auto; margin: 0; padding: 8px 16px; }
 .done-mark { color: #6d7a90; font-size: 11px; }
+.human-review { min-width: 250px; }
+.human-review summary { color: #365be6; cursor: pointer; font-size: 11px; font-weight: 700; }
+.human-review-form { display: grid; gap: 9px; margin-top: 10px; white-space: normal; }
+.human-review-form label { margin: 0; font-size: 11px; }
+.human-review-form select,.human-review-form textarea { width: 100%; margin-top: 5px; padding: 8px; border: 1px solid #dce2ed; border-radius: 7px; background: white; color: #182a42; font: inherit; resize: vertical; }
+.human-review-form .accept-button { width: 100%; justify-content: center; }
+.human-verdict { display: inline-block; border-radius: 20px; padding: 6px 10px; font-size: 11px; font-weight: 700; }
+.human-verdict.fire { color: #b52e2e; background: #ffeded; }
+.human-verdict.false_alarm { color: #23744a; background: #e7f7ef; }
+.human-verdict.uncertain { color: #8a6200; background: #fff4cf; }
+.human-notes { max-width: 260px; margin: 7px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; line-height: 1.5; }
 .event-empty { padding: 32px; border-radius: 12px; background: #f7f8fb; color: #8490a5; text-align: center; font-size: 13px; }
 .yolo-score { color: #d83b32; }
 .vlm-result { display: inline-block; border-radius: 20px; padding: 6px 10px; font-size: 11px; font-weight: 700; }

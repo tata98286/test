@@ -60,6 +60,7 @@ EVENT_START_WINDOW_SECONDS = 3.0
 EVENT_END_QUIET_SECONDS = 30.0
 EVENT_LOCATION_DISTANCE = 0.20
 DINO_MODEL_PATH = Path(os.getenv('DINO_MODEL_PATH', r'C:\its\model\full_crop_gate_multilabel.pt'))
+HUMAN_VERDICTS = {'FIRE', 'FALSE_ALARM', 'UNCERTAIN'}
 
 
 def login_required(view):
@@ -88,6 +89,16 @@ def matches_yolo_condition(detected_labels, detection_mode='or'):
     if detection_mode == 'and':
         return {'fire', 'smoke'}.issubset(detected_labels)
     return bool({'fire', 'smoke'}.intersection(detected_labels))
+
+
+def parse_human_review(form):
+    verdict = form.get('human_verdict', '').strip().upper()
+    notes = form.get('human_notes', '').strip()
+    if verdict not in HUMAN_VERDICTS:
+        raise ValueError('사람 최종 판정을 선택해 주세요.')
+    if len(notes) > 500:
+        raise ValueError('사람 의견은 500자 이하로 입력해 주세요.')
+    return verdict, notes or None
 
 
 def get_dino():
@@ -849,10 +860,14 @@ def load_recent_events():
                       e.dino_threshold, e.dino_passed, e.yolo_candidate_count, e.dino_pass_count,
                       e.evidence_names,
                       l.english_answer, l.korean_translation, l.translation_status, l.request_history,
-                      u.username AS accepted_by_username
+                      u.username AS accepted_by_username,
+                      m.human_verdict, m.human_notes, m.labeled_at,
+                      reviewer.username AS labeled_by_username
                FROM fire_event e
                LEFT JOIN `user` u ON u.user_id = e.accepted_by
                LEFT JOIN vlm_language_result l ON l.event_id = e.event_id
+               LEFT JOIN model_comparison_event m ON m.event_id = e.event_id
+               LEFT JOIN `user` reviewer ON reviewer.user_id = m.labeled_by
                ORDER BY e.detected_at DESC LIMIT 20'''
         )
         events = cursor.fetchall()
@@ -1045,13 +1060,43 @@ def inspection_stop(token):
 @app.post('/events/<int:event_id>/accept')
 @login_required
 def accept_event(event_id):
-    with get_db().cursor() as cursor:
-        cursor.execute(
-            '''UPDATE fire_event
-               SET status='RECEIVED', accepted_at=CURRENT_TIMESTAMP, accepted_by=%s
-               WHERE event_id=%s AND status='UNRECEIVED' ''',
-            (session['user_id'], event_id),
-        )
+    try:
+        verdict, notes = parse_human_review(request.form)
+    except ValueError as exc:
+        if request.headers.get('Accept') == 'application/json':
+            return jsonify(ok=False, error=str(exc)), 400
+        flash(str(exc))
+        return redirect(url_for('home') + '#event-board')
+
+    connection = get_db()
+    try:
+        connection.begin()
+        with connection.cursor() as cursor:
+            cursor.execute(
+                '''UPDATE fire_event
+                   SET status='RECEIVED', accepted_at=CURRENT_TIMESTAMP, accepted_by=%s
+                   WHERE event_id=%s AND status='UNRECEIVED' ''',
+                (session['user_id'], event_id),
+            )
+            if cursor.rowcount != 1:
+                connection.rollback()
+                if request.headers.get('Accept') == 'application/json':
+                    return jsonify(ok=False, error='이미 접수됐거나 존재하지 않는 이벤트입니다.'), 409
+                flash('이미 접수됐거나 존재하지 않는 이벤트입니다.')
+                return redirect(url_for('home') + '#event-board')
+            cursor.execute(
+                '''UPDATE model_comparison_event
+                   SET human_verdict=%s, human_notes=%s,
+                       labeled_at=CURRENT_TIMESTAMP, labeled_by=%s
+                   WHERE event_id=%s''',
+                (verdict, notes, session['user_id'], event_id),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError('비교 이벤트 기록을 찾을 수 없습니다.')
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
     if request.headers.get('Accept') == 'application/json':
         return jsonify(ok=True)
     return redirect(url_for('home') + '#event-board')
