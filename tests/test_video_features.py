@@ -18,6 +18,21 @@ class VideoFeaturesTest(unittest.TestCase):
         self.assertFalse(module.has_fire_or_smoke(set()))
         self.assertFalse(module.has_fire_or_smoke({'light', 'cloud'}))
 
+    def test_image_is_converted_to_five_frame_test_video(self):
+        with tempfile.TemporaryDirectory() as temp:
+            image_path = Path(temp) / 'sample.png'
+            video_path = Path(temp) / 'sample.mp4'
+            cv2.imwrite(str(image_path), np.full((120, 160, 3), 127, dtype=np.uint8))
+            module.prepare_image_test_video(image_path, video_path)
+            capture = cv2.VideoCapture(str(video_path))
+            self.assertTrue(capture.isOpened())
+            self.assertEqual(round(capture.get(cv2.CAP_PROP_FPS)), 5)
+            self.assertEqual(round(capture.get(cv2.CAP_PROP_FRAME_COUNT)), 5)
+            ok, frame = capture.read()
+            capture.release()
+            self.assertTrue(ok)
+            self.assertEqual(frame.shape[:2], (120, 160))
+
     def test_vlm_parser_rejects_prompt_echo_and_accepts_korean_evidence(self):
         malformed = 'YES, One short Korean sentence describing the visible evidence. For UNCERTAIN, explain what specifically needs human visual review.'
         self.assertIsNone(module.parse_vlm_response(malformed))

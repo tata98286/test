@@ -38,6 +38,10 @@ VLM_MODEL_PATH = Path(os.getenv('VLM_MODEL_PATH', r'C:\its\model\Qwen2-VL-2B-Ins
 RESULT_DIR = Path(app.instance_path) / 'inspection_results'
 RESULT_DIR.mkdir(parents=True, exist_ok=True)
 ALLOWED_VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.m4v'}
+ALLOWED_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp', '.bmp'}
+IMAGE_TEST_FPS = 5.0
+IMAGE_TEST_FRAMES = 5
+MAX_IMAGE_PIXELS = 40_000_000
 _model = None
 _model_lock = threading.Lock()
 _vlm_model = None
@@ -539,6 +543,25 @@ def clean_old_results():
             path.unlink(missing_ok=True)
 
 
+def prepare_image_test_video(image_path, video_path):
+    image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+    if image is None:
+        raise ValueError('이미지를 열 수 없습니다. 지원되는 이미지 파일인지 확인하세요.')
+    height, width = image.shape[:2]
+    if width <= 0 or height <= 0 or width * height > MAX_IMAGE_PIXELS:
+        raise ValueError('이미지 크기가 너무 큽니다. 4천만 픽셀 이하 이미지를 선택해 주세요.')
+    writer = cv2.VideoWriter(
+        str(video_path), cv2.VideoWriter_fourcc(*'mp4v'), IMAGE_TEST_FPS, (width, height)
+    )
+    if not writer.isOpened():
+        raise RuntimeError('이미지 테스트용 영상을 만들 수 없습니다.')
+    try:
+        for _ in range(IMAGE_TEST_FRAMES):
+            writer.write(image)
+    finally:
+        writer.release()
+
+
 def inspect_video(source_path, result_path):
     capture = cv2.VideoCapture(str(source_path))
     if not capture.isOpened():
@@ -893,8 +916,11 @@ def home():
 @app.post('/inspect')
 @login_required
 def inspect():
-    upload = request.files.get('video')
+    video_upload = request.files.get('video')
+    image_upload = request.files.get('image')
     source_url = request.form.get('youtube_url', '').strip()
+    upload = None
+    source_type = None
     if source_url:
         try:
             source_url = youtube_url(source_url)
@@ -902,21 +928,41 @@ def inspect():
             flash(str(exc))
             return redirect(url_for('home'))
         suffix = '.mp4'
-    else:
-        if not upload or not upload.filename:
-            flash('영상 파일 또는 YouTube 주소를 입력해 주세요.')
-            return redirect(url_for('home'))
+        source_type = 'youtube'
+    elif video_upload and video_upload.filename:
+        upload = video_upload
         suffix = Path(upload.filename).suffix.lower()
         if suffix not in ALLOWED_VIDEO_EXTENSIONS:
             flash('지원되는 영상 파일을 선택해 주세요.')
             return redirect(url_for('home'))
+        source_type = 'video'
+    elif image_upload and image_upload.filename:
+        upload = image_upload
+        suffix = Path(upload.filename).suffix.lower()
+        if suffix not in ALLOWED_IMAGE_EXTENSIONS:
+            flash('JPG, PNG, WEBP 또는 BMP 이미지를 선택해 주세요.')
+            return redirect(url_for('home'))
+        source_type = 'image'
+    else:
+        flash('영상, 이미지 또는 YouTube 주소를 입력해 주세요.')
+        return redirect(url_for('home'))
 
     clean_old_results()
     token = uuid.uuid4().hex
-    source_path = RESULT_DIR / f'{token}_source{suffix}'
+    source_path = RESULT_DIR / f'{token}_source{suffix if source_type != "image" else ".mp4"}'
     result_name = f'{token}_result.mp4'
     result_path = RESULT_DIR / result_name
-    if not source_url:
+    if source_type == 'image':
+        image_path = RESULT_DIR / f'{token}_upload{suffix}'
+        upload.save(image_path)
+        try:
+            prepare_image_test_video(image_path, source_path)
+        except (ValueError, RuntimeError) as exc:
+            image_path.unlink(missing_ok=True)
+            source_path.unlink(missing_ok=True)
+            flash(str(exc))
+            return redirect(url_for('home'))
+    elif not source_url:
         upload.save(source_path)
     inspection_jobs[token] = {
         'token': token,
@@ -924,6 +970,7 @@ def inspect():
         'source_path': source_path,
         'result_path': result_path,
         'original_name': 'YouTube 영상' if source_url else Path(upload.filename).name,
+        'source_type': source_type,
         'source_url': source_url or None,
         'vlm_events': {},
         'status': 'downloading' if source_url else 'pending',

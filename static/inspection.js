@@ -1,16 +1,23 @@
 const form = document.getElementById('inspection-form');
 const videoInput = document.getElementById('video');
+const imageInput = document.getElementById('image');
 const button = document.getElementById('inspect-button');
 
 if (form) {
+  videoInput.addEventListener('change', () => {
+    if (videoInput.files.length) imageInput.value = '';
+  });
+  imageInput.addEventListener('change', () => {
+    if (imageInput.files.length) videoInput.value = '';
+  });
   form.addEventListener('submit', (event) => {
-    if (!videoInput.files.length && !document.getElementById('youtube-url').value.trim()) {
+    if (!videoInput.files.length && !imageInput.files.length && !document.getElementById('youtube-url').value.trim()) {
       event.preventDefault();
       videoInput.focus();
       return;
     }
     button.disabled = true;
-    button.textContent = '영상 업로드 중...';
+    button.textContent = '검사 파일 업로드 중...';
   });
 }
 

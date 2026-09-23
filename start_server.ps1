@@ -3,7 +3,8 @@ $ErrorActionPreference = 'Stop'
 $projectPath = 'C:\its\test'
 $pythonPath = Join-Path $projectPath '.venv\Scripts\python.exe'
 $appPath = Join-Path $projectPath 'app.py'
-$logPath = Join-Path $projectPath 'server-autostart.log'
+$outputLogPath = Join-Path $projectPath 'server-autostart.out.log'
+$errorLogPath = Join-Path $projectPath 'server-autostart.err.log'
 
 # Do not start a second server when port 5000 is already in use.
 $listener = Get-NetTCPConnection -LocalPort 5000 -State Listen -ErrorAction SilentlyContinue
@@ -14,10 +15,17 @@ if ($listener) {
 Set-Location -LiteralPath $projectPath
 
 try {
-    & $pythonPath $appPath *>> $logPath
+    $server = Start-Process -FilePath $pythonPath `
+        -ArgumentList $appPath `
+        -WorkingDirectory $projectPath `
+        -RedirectStandardOutput $outputLogPath `
+        -RedirectStandardError $errorLogPath `
+        -PassThru `
+        -Wait
+    exit $server.ExitCode
 }
 catch {
     "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') startup failed: $($_.Exception.Message)" |
-        Add-Content -LiteralPath $logPath -Encoding UTF8
+        Add-Content -LiteralPath $errorLogPath -Encoding UTF8
     exit 1
 }
