@@ -14,6 +14,11 @@
         <input class="file-input" id="video" name="video" type="file" accept="video/mp4,video/x-msvideo,video/quicktime,video/x-matroska,video/webm,.m4v">
         <label class="file-picker" for="image"><span class="file-icon">▧</span><strong>이미지 파일 선택</strong><small>JPG, PNG, WEBP, BMP 이미지 한 장을 검사합니다.</small></label>
         <input class="file-input" id="image" name="image" type="file" accept="image/jpeg,image/png,image/webp,image/bmp">
+        <fieldset class="condition-picker">
+          <legend>YOLO 이벤트 조건</legend>
+          <label><input type="radio" name="detection_mode" value="or" checked> 불 또는 연기 (OR) <small>민감하게 탐지</small></label>
+          <label><input type="radio" name="detection_mode" value="and"> 불과 연기 모두 (AND) <small>엄격하게 탐지</small></label>
+        </fieldset>
         <label for="youtube-url">또는 YouTube 영상 주소</label>
         <input id="youtube-url" name="youtube_url" type="url" placeholder="https://www.youtube.com/watch?v=..." style="width:100%;box-sizing:border-box;margin:10px 0;padding:12px">
         <p class="processing-note">공개된 녹화 영상 · 최대 30분 / 500MB / 720p. 주소 입력 시 해당 영상을 검사합니다.</p>
@@ -33,6 +38,7 @@
       <p class="processing-note">VLM 판정은 응답 도착 시점부터 표시됩니다. 마지막 1초는 최종 판정 확인용 정지 화면입니다.</p>
       {% if report.stopped_early %}<div class="notice">사용자가 검사를 종료했습니다. 종료 지점까지의 결과입니다.</div>{% endif %}
       <div class="result-title"><div><span class="status {{ 'danger' if report.has_alert else 'safe' }}">{{ '화재·연기 감지' if report.has_alert else '이상 없음' }}</span><h2>검사 결과</h2></div><strong class="confidence">{{ report.max_alert_confidence }}%<small>최고 감지 신뢰도</small></strong></div>
+      <p class="processing-note">YOLO 조건: {{ '불과 연기 모두 (AND)' if report.detection_mode == 'and' else '불 또는 연기 (OR)' }}</p>
       <p class="confidence-help">영상 전체에서 AI가 불 또는 연기라고 가장 확실하게 판단한 탐지 결과입니다. 실제 화재 확률을 뜻하지는 않습니다.</p>
       <video controls preload="metadata" src="{{ url_for('inspection_result', filename=report.result_name) }}">결과 영상을 재생할 수 없습니다.</video>
       {% if report.evidence_names %}<div class="evidence-grid">{% for image_name in report.evidence_names %}<figure><img src="{{ url_for('inspection_result', filename=image_name) }}" alt="VLM 판단용 주요 장면 {{ loop.index }}"><figcaption>주요 장면 {{ loop.index }}</figcaption></figure>{% endfor %}</div>{% endif %}

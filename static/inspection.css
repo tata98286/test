@@ -50,6 +50,30 @@
   cursor: pointer;
 }
 
+.condition-picker {
+  display: grid;
+  gap: 8px;
+  margin: 16px 0;
+  padding: 14px;
+  border: 1px solid #dfe4ef;
+  border-radius: 10px;
+}
+
+.condition-picker legend {
+  padding: 0 6px;
+  font-weight: 700;
+}
+
+.condition-picker label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.condition-picker small {
+  color: #68738a;
+}
+
 button:disabled {
   opacity: .65;
   cursor: wait;

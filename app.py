@@ -84,7 +84,9 @@ def alert_class_ids(model):
     return [class_id for class_id, name in model.names.items() if name in {'fire', 'smoke'}]
 
 
-def has_fire_or_smoke(detected_labels):
+def matches_yolo_condition(detected_labels, detection_mode='or'):
+    if detection_mode == 'and':
+        return {'fire', 'smoke'}.issubset(detected_labels)
     return bool({'fire', 'smoke'}.intersection(detected_labels))
 
 
@@ -484,7 +486,8 @@ def start_event_verification(job, candidates, center):
                  cached['vlm_result'] if cached else None,
                  cached['vlm_answer'] if cached else None,
                   VLM_PROMPT_VERSION, VLM_PROMPT,
-                  json.dumps({'prompt': VLM_PROMPT_VERSION, 'hashes': hashes}), json.dumps(evidence_names),
+                  json.dumps({'prompt': VLM_PROMPT_VERSION, 'hashes': hashes,
+                              'yolo_condition': job.get('detection_mode', 'or').upper()}), json.dumps(evidence_names),
                   len(candidates), round(candidates[0]['video_second'], 3),
                   round(candidates[-1]['video_second'], 3), round(center[0], 6), round(center[1], 6),
                   round(dino_scores['fire'] * 100, 3), round(dino_scores['smoke'] * 100, 3),
@@ -685,7 +688,7 @@ def generate_inspection_stream(job):
                 if alert_centers:
                     center = (sum(p[0] for p in alert_centers) / len(alert_centers), sum(p[1] for p in alert_centers) / len(alert_centers))
                 dino = None
-                if has_fire_or_smoke(detected_labels) and center is not None:
+                if matches_yolo_condition(detected_labels, job.get('detection_mode', 'or')) and center is not None:
                     with _dino_lock:
                         dino = classify_yolo_crops_with_dino(frame, alert_boxes)
                     second = int(video_second)
@@ -717,7 +720,7 @@ def generate_inspection_stream(job):
                         if video_second - matched_event['last_db_update_second'] >= 1.0:
                             update_event_detection(matched_event, video_second, frame_confidence, matched_event['center'])
                             matched_event['last_db_update_second'] = video_second
-                if has_fire_or_smoke(detected_labels) and center is not None and matched_event is None:
+                if matches_yolo_condition(detected_labels, job.get('detection_mode', 'or')) and center is not None and matched_event is None:
                     if not dino['passed']:
                         event_candidates = []
                         annotated = overlay(plot_alerts(result), job)
@@ -786,6 +789,7 @@ def generate_inspection_stream(job):
         converted.replace(result_path)
         job['report'] = {
             'filename': job['original_name'],
+            'detection_mode': job.get('detection_mode', 'or'),
             'source_url': job.get('source_url'),
             'processed_frames': processed_frames,
             'total_frames': total_frames,
@@ -919,6 +923,9 @@ def inspect():
     video_upload = request.files.get('video')
     image_upload = request.files.get('image')
     source_url = request.form.get('youtube_url', '').strip()
+    detection_mode = request.form.get('detection_mode', 'or').lower()
+    if detection_mode not in {'or', 'and'}:
+        abort(400)
     upload = None
     source_type = None
     if source_url:
@@ -971,6 +978,7 @@ def inspect():
         'result_path': result_path,
         'original_name': 'YouTube 영상' if source_url else Path(upload.filename).name,
         'source_type': source_type,
+        'detection_mode': detection_mode,
         'source_url': source_url or None,
         'vlm_events': {},
         'status': 'downloading' if source_url else 'pending',
@@ -987,7 +995,8 @@ def inspect():
     }
     if source_url:
         (RESULT_DIR / f'{token}_source.json').write_text(
-            json.dumps({'source_url': source_url, 'job_token': token}, ensure_ascii=False), encoding='utf-8')
+            json.dumps({'source_url': source_url, 'job_token': token,
+                        'yolo_condition': detection_mode.upper()}, ensure_ascii=False), encoding='utf-8')
         threading.Thread(target=download_youtube, args=(inspection_jobs[token], RESULT_DIR), daemon=True).start()
     session.pop('last_report', None)
     session['active_job'] = token

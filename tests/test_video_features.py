@@ -12,11 +12,16 @@ from vlm_display import overlay, STATES
 
 class VideoFeaturesTest(unittest.TestCase):
     def test_fire_or_smoke_can_enter_event_pipeline(self):
-        self.assertTrue(module.has_fire_or_smoke({'fire'}))
-        self.assertTrue(module.has_fire_or_smoke({'smoke'}))
-        self.assertTrue(module.has_fire_or_smoke({'fire', 'smoke'}))
-        self.assertFalse(module.has_fire_or_smoke(set()))
-        self.assertFalse(module.has_fire_or_smoke({'light', 'cloud'}))
+        self.assertTrue(module.matches_yolo_condition({'fire'}, 'or'))
+        self.assertTrue(module.matches_yolo_condition({'smoke'}, 'or'))
+        self.assertTrue(module.matches_yolo_condition({'fire', 'smoke'}, 'or'))
+        self.assertFalse(module.matches_yolo_condition(set(), 'or'))
+        self.assertFalse(module.matches_yolo_condition({'light', 'cloud'}, 'or'))
+
+    def test_fire_and_smoke_requires_both_labels(self):
+        self.assertFalse(module.matches_yolo_condition({'fire'}, 'and'))
+        self.assertFalse(module.matches_yolo_condition({'smoke'}, 'and'))
+        self.assertTrue(module.matches_yolo_condition({'fire', 'smoke'}, 'and'))
 
     def test_image_is_converted_to_five_frame_test_video(self):
         with tempfile.TemporaryDirectory() as temp:
