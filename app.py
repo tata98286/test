@@ -80,6 +80,10 @@ def alert_class_ids(model):
     return [class_id for class_id, name in model.names.items() if name in {'fire', 'smoke'}]
 
 
+def has_fire_or_smoke(detected_labels):
+    return bool({'fire', 'smoke'}.intersection(detected_labels))
+
+
 def get_dino():
     global _dino_model, _dino_heads
     if _dino_model is None:
@@ -658,7 +662,7 @@ def generate_inspection_stream(job):
                 if alert_centers:
                     center = (sum(p[0] for p in alert_centers) / len(alert_centers), sum(p[1] for p in alert_centers) / len(alert_centers))
                 dino = None
-                if {'fire', 'smoke'}.issubset(detected_labels) and center is not None:
+                if has_fire_or_smoke(detected_labels) and center is not None:
                     with _dino_lock:
                         dino = classify_yolo_crops_with_dino(frame, alert_boxes)
                     second = int(video_second)
@@ -690,7 +694,7 @@ def generate_inspection_stream(job):
                         if video_second - matched_event['last_db_update_second'] >= 1.0:
                             update_event_detection(matched_event, video_second, frame_confidence, matched_event['center'])
                             matched_event['last_db_update_second'] = video_second
-                if {'fire', 'smoke'}.issubset(detected_labels) and center is not None and matched_event is None:
+                if has_fire_or_smoke(detected_labels) and center is not None and matched_event is None:
                     if not dino['passed']:
                         event_candidates = []
                         annotated = overlay(plot_alerts(result), job)

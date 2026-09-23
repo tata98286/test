@@ -11,6 +11,13 @@ from vlm_display import overlay, STATES
 
 
 class VideoFeaturesTest(unittest.TestCase):
+    def test_fire_or_smoke_can_enter_event_pipeline(self):
+        self.assertTrue(module.has_fire_or_smoke({'fire'}))
+        self.assertTrue(module.has_fire_or_smoke({'smoke'}))
+        self.assertTrue(module.has_fire_or_smoke({'fire', 'smoke'}))
+        self.assertFalse(module.has_fire_or_smoke(set()))
+        self.assertFalse(module.has_fire_or_smoke({'light', 'cloud'}))
+
     def test_vlm_parser_rejects_prompt_echo_and_accepts_korean_evidence(self):
         malformed = 'YES, One short Korean sentence describing the visible evidence. For UNCERTAIN, explain what specifically needs human visual review.'
         self.assertIsNone(module.parse_vlm_response(malformed))
