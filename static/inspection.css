@@ -59,6 +59,15 @@
   border-radius: 10px;
 }
 
+.inspection-mode-head {
+  margin-bottom: 6px;
+  font-size: 1.05rem;
+}
+
+.condition-picker:disabled {
+  opacity: .72;
+}
+
 .condition-picker legend {
   padding: 0 6px;
   font-weight: 700;

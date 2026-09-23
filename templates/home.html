@@ -7,18 +7,11 @@
   {% for message in get_flashed_messages() %}<div class="error" role="alert">{{ message }}</div>{% endfor %}
   <div class="inspection-grid">
     <article class="upload-card">
-      <h2>검사할 영상 또는 이미지 선택</h2><p class="muted">영상과 이미지 중 하나를 선택하세요 · 최대 500MB</p>
+      <h2>검사할 영상</h2><p class="muted">영상 또는 이미지 파일 · 최대 500MB</p>
       <form id="inspection-form" method="post" action="{{ url_for('inspect') }}" enctype="multipart/form-data">
         <input type="hidden" name="csrf_token" value="{{ session['csrf_token'] }}">
-        <label class="file-picker" for="video"><span class="file-icon">▶</span><strong>영상 파일 선택</strong><small>파일을 선택하면 아래에서 검사할 수 있습니다.</small></label>
-        <input class="file-input" id="video" name="video" type="file" accept="video/mp4,video/x-msvideo,video/quicktime,video/x-matroska,video/webm,.m4v">
-        <label class="file-picker" for="image"><span class="file-icon">▧</span><strong>이미지 파일 선택</strong><small>JPG, PNG, WEBP, BMP 이미지 한 장을 검사합니다.</small></label>
-        <input class="file-input" id="image" name="image" type="file" accept="image/jpeg,image/png,image/webp,image/bmp">
-        <fieldset class="condition-picker">
-          <legend>YOLO 이벤트 조건</legend>
-          <label><input type="radio" name="detection_mode" value="or" checked> 불 또는 연기 (OR) <small>민감하게 탐지</small></label>
-          <label><input type="radio" name="detection_mode" value="and"> 불과 연기 모두 (AND) <small>엄격하게 탐지</small></label>
-        </fieldset>
+        <label class="file-picker" for="media"><span class="file-icon">▶</span><strong>영상/이미지 파일 선택</strong><small>영상이나 이미지 한 개를 선택하세요.</small></label>
+        <input class="file-input" id="media" name="media" type="file" accept="video/mp4,video/x-msvideo,video/quicktime,video/x-matroska,video/webm,.m4v,image/jpeg,image/png,image/webp,image/bmp">
         <label for="youtube-url">또는 YouTube 영상 주소</label>
         <input id="youtube-url" name="youtube_url" type="url" placeholder="https://www.youtube.com/watch?v=..." style="width:100%;box-sizing:border-box;margin:10px 0;padding:12px">
         <p class="processing-note">공개된 녹화 영상 · 최대 30분 / 500MB / 720p. 주소 입력 시 해당 영상을 검사합니다.</p>
@@ -27,8 +20,14 @@
       <p class="processing-note">영상 길이와 PC 성능에 따라 검사에 시간이 걸릴 수 있습니다. 완료될 때까지 이 창을 닫지 마세요.</p>
     </article>
     <article class="result-card">
+      <div class="inspection-mode-head"><strong>실시간 AI 검사</strong></div>
+      <fieldset class="condition-picker" {% if job_token %}disabled{% endif %}>
+        <legend>YOLO 이벤트 조건 선택</legend>
+        <label><input form="inspection-form" type="radio" name="detection_mode" value="or" {% if not job_token or current_job.detection_mode != 'and' %}checked{% endif %}> 불 또는 연기 (OR) <small>민감하게 탐지</small></label>
+        <label><input form="inspection-form" type="radio" name="detection_mode" value="and" {% if job_token and current_job.detection_mode == 'and' %}checked{% endif %}> 불과 연기 모두 (AND) <small>엄격하게 탐지</small></label>
+      </fieldset>
       {% if job_token %}
-      <div class="live-head"><div><span class="live-dot"></span><strong>실시간 AI 검사 중</strong></div><div class="live-actions"><strong id="live-progress">0%</strong><form id="stop-inspection-form" method="post" action="{{ url_for('inspection_stop', token=job_token) }}"><input type="hidden" name="csrf_token" value="{{ session['csrf_token'] }}"><button id="stop-inspection-button" class="stop-button" type="submit">여기까지 검사 종료</button></form></div></div>
+      <div class="live-head"><div><span class="live-dot"></span><strong>검사 중</strong></div><div class="live-actions"><strong id="live-progress">0%</strong><form id="stop-inspection-form" method="post" action="{{ url_for('inspection_stop', token=job_token) }}"><input type="hidden" name="csrf_token" value="{{ session['csrf_token'] }}"><button id="stop-inspection-button" class="stop-button" type="submit">여기까지 검사 종료</button></form></div></div>
       <div class="live-video"><img id="live-image" {% if current_job.status == 'pending' %}src="{{ url_for('inspection_stream', token=job_token) }}"{% endif %} alt="YOLO 실시간 화재 탐지 화면"></div>
       <p class="processing-note">분석된 프레임이 바로 표시됩니다. 완료되면 결과 요약 화면으로 자동 전환됩니다.</p>
       <p id="vlm-live-status" role="status">AI 후보 감지를 기다리고 있습니다.</p>

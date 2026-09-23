@@ -920,8 +920,7 @@ def home():
 @app.post('/inspect')
 @login_required
 def inspect():
-    video_upload = request.files.get('video')
-    image_upload = request.files.get('image')
+    media_upload = request.files.get('media')
     source_url = request.form.get('youtube_url', '').strip()
     detection_mode = request.form.get('detection_mode', 'or').lower()
     if detection_mode not in {'or', 'and'}:
@@ -936,20 +935,16 @@ def inspect():
             return redirect(url_for('home'))
         suffix = '.mp4'
         source_type = 'youtube'
-    elif video_upload and video_upload.filename:
-        upload = video_upload
+    elif media_upload and media_upload.filename:
+        upload = media_upload
         suffix = Path(upload.filename).suffix.lower()
-        if suffix not in ALLOWED_VIDEO_EXTENSIONS:
-            flash('지원되는 영상 파일을 선택해 주세요.')
+        if suffix in ALLOWED_VIDEO_EXTENSIONS:
+            source_type = 'video'
+        elif suffix in ALLOWED_IMAGE_EXTENSIONS:
+            source_type = 'image'
+        else:
+            flash('지원되는 영상 또는 이미지 파일을 선택해 주세요.')
             return redirect(url_for('home'))
-        source_type = 'video'
-    elif image_upload and image_upload.filename:
-        upload = image_upload
-        suffix = Path(upload.filename).suffix.lower()
-        if suffix not in ALLOWED_IMAGE_EXTENSIONS:
-            flash('JPG, PNG, WEBP 또는 BMP 이미지를 선택해 주세요.')
-            return redirect(url_for('home'))
-        source_type = 'image'
     else:
         flash('영상, 이미지 또는 YouTube 주소를 입력해 주세요.')
         return redirect(url_for('home'))

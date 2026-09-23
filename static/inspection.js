@@ -1,19 +1,12 @@
 const form = document.getElementById('inspection-form');
-const videoInput = document.getElementById('video');
-const imageInput = document.getElementById('image');
+const mediaInput = document.getElementById('media');
 const button = document.getElementById('inspect-button');
 
 if (form) {
-  videoInput.addEventListener('change', () => {
-    if (videoInput.files.length) imageInput.value = '';
-  });
-  imageInput.addEventListener('change', () => {
-    if (imageInput.files.length) videoInput.value = '';
-  });
   form.addEventListener('submit', (event) => {
-    if (!videoInput.files.length && !imageInput.files.length && !document.getElementById('youtube-url').value.trim()) {
+    if (!mediaInput.files.length && !document.getElementById('youtube-url').value.trim()) {
       event.preventDefault();
-      videoInput.focus();
+      mediaInput.focus();
       return;
     }
     button.disabled = true;
