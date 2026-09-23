@@ -4,6 +4,14 @@
 
 화재 모델이 헤드라이트, 가로등, 젖은 노면 반사, 안개 속 산란광을 불꽃·연기로 잘못 판단하는지 확인하기 위한 후보 목록이다. 모두 현재 웹의 YouTube 주소 입력 제한인 30분 이내다.
 
+## 바로 실행할 3개 영상
+
+| 구분 | 길이 | 링크 |
+|---|---:|---|
+| 비 오는 야간 도로 | 8:19 | [YouTube 영상 열기](https://www.youtube.com/watch?v=UBDGeaTF_wc) |
+| 더러운 후면 유리 번짐 | 1:00 | [YouTube 영상 열기](https://www.youtube.com/watch?v=rUyH8y3qnCU) |
+| 세종포천고속도로 남한산성터널 | 4:32 | [YouTube 영상 열기](https://www.youtube.com/watch?v=xtD4A9-v49Y) |
+
 ## A. 정면 헤드라이트 번짐
 
 | 번호 | 길이 | 영상 | 테스트 목적 |

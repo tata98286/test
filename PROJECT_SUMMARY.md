@@ -243,4 +243,16 @@ OR 검사는 사용자가 영상 끝부분 전에 중지했고, AND 검사는 �
 
 ## 감사합니다
 
-부록: `NIGHT_HEADLIGHT_TEST_VIDEOS.md`
+---
+
+# 부록. 바로 실행할 테스트 영상
+
+| 구분 | 길이 | 링크 | 확인할 내용 |
+|---|---:|---|---|
+| 비 오는 야간 도로 | 8:19 | [YouTube 영상 열기](https://www.youtube.com/watch?v=UBDGeaTF_wc) | 비·젖은 노면·헤드라이트 반사광 |
+| 더러운 후면 유리 번짐 | 1:00 | [YouTube 영상 열기](https://www.youtube.com/watch?v=rUyH8y3qnCU) | 유리에 퍼진 헤드라이트를 불꽃으로 오인하는지 |
+| 세종포천고속도로 남한산성터널 | 4:32 | [YouTube 영상 열기](https://www.youtube.com/watch?v=xtD4A9-v49Y) | 기존 OR 4건·AND 0건 비교 재현 |
+
+웹페이지의 **YouTube 영상 주소** 칸에 링크를 한 개씩 붙여 넣고 동일한 OR/AND 및 신뢰도 조건으로 검사한다.
+
+전체 후보 목록: `NIGHT_HEADLIGHT_TEST_VIDEOS.md`
