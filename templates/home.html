@@ -21,11 +21,11 @@
     </article>
     <article class="result-card">
       <div class="inspection-mode-head"><strong>실시간 AI 검사</strong></div>
-      <fieldset class="condition-picker" {% if job_token %}disabled{% endif %}>
-        <legend>YOLO 이벤트 조건 선택</legend>
-        <label><input form="inspection-form" type="radio" name="detection_mode" value="or" {% if not job_token or current_job.detection_mode != 'and' %}checked{% endif %}> 불 또는 연기 (OR) <small>민감하게 탐지</small></label>
-        <label><input form="inspection-form" type="radio" name="detection_mode" value="and" {% if job_token and current_job.detection_mode == 'and' %}checked{% endif %}> 불과 연기 모두 (AND) <small>엄격하게 탐지</small></label>
-      </fieldset>
+      <div class="condition-picker{% if job_token %} disabled{% endif %}">
+        <strong>YOLO 이벤트 조건</strong>
+        <label><input form="inspection-form" type="radio" name="detection_mode" value="or" {% if not job_token or current_job.detection_mode != 'and' %}checked{% endif %} {% if job_token %}disabled{% endif %}> 불 또는 연기 (OR) <small>민감하게</small></label>
+        <label><input form="inspection-form" type="radio" name="detection_mode" value="and" {% if job_token and current_job.detection_mode == 'and' %}checked{% endif %} {% if job_token %}disabled{% endif %}> 불과 연기 모두 (AND) <small>엄격하게</small></label>
+      </div>
       {% if job_token %}
       <div class="live-head"><div><span class="live-dot"></span><strong>검사 중</strong></div><div class="live-actions"><strong id="live-progress">0%</strong><form id="stop-inspection-form" method="post" action="{{ url_for('inspection_stop', token=job_token) }}"><input type="hidden" name="csrf_token" value="{{ session['csrf_token'] }}"><button id="stop-inspection-button" class="stop-button" type="submit">여기까지 검사 종료</button></form></div></div>
       <div class="live-video"><img id="live-image" {% if current_job.status == 'pending' %}src="{{ url_for('inspection_stream', token=job_token) }}"{% endif %} alt="YOLO 실시간 화재 탐지 화면"></div>

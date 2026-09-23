@@ -51,10 +51,12 @@
 }
 
 .condition-picker {
-  display: grid;
-  gap: 8px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: nowrap;
   margin: 16px 0;
-  padding: 14px;
+  padding: 12px 14px;
   border: 1px solid #dfe4ef;
   border-radius: 10px;
 }
@@ -64,23 +66,44 @@
   font-size: 1.05rem;
 }
 
-.condition-picker:disabled {
+.condition-picker.disabled {
   opacity: .72;
 }
 
-.condition-picker legend {
-  padding: 0 6px;
-  font-weight: 700;
+.condition-picker > strong {
+  flex: 0 0 auto;
+  font-size: 13px;
+  white-space: nowrap;
 }
 
 .condition-picker label {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
+  margin: 0;
+  white-space: nowrap;
+  font-weight: 700;
+}
+
+.condition-picker input[type="radio"] {
+  width: auto;
+  margin: 0;
+  padding: 0;
+  flex: 0 0 auto;
 }
 
 .condition-picker small {
+  display: inline;
+  margin: 0;
   color: #68738a;
+  font-weight: 400;
+}
+
+@media (max-width: 900px) {
+  .condition-picker {
+    flex-wrap: wrap;
+    gap: 10px 16px;
+  }
 }
 
 button:disabled {
