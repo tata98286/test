@@ -61,6 +61,7 @@ EVENT_END_QUIET_SECONDS = 30.0
 EVENT_LOCATION_DISTANCE = 0.20
 DINO_MODEL_PATH = Path(os.getenv('DINO_MODEL_PATH', r'C:\its\model\full_crop_gate_multilabel.pt'))
 HUMAN_VERDICTS = {'FIRE', 'FALSE_ALARM', 'UNCERTAIN'}
+YOLO_THRESHOLDS = {40, 70, 90}
 
 
 def login_required(view):
@@ -89,6 +90,16 @@ def matches_yolo_condition(detected_labels, detection_mode='or'):
     if detection_mode == 'and':
         return {'fire', 'smoke'}.issubset(detected_labels)
     return bool({'fire', 'smoke'}.intersection(detected_labels))
+
+
+def parse_yolo_threshold(form):
+    try:
+        threshold = int(form.get('yolo_threshold', '40'))
+    except (TypeError, ValueError):
+        raise ValueError('YOLO 신뢰도는 40%, 70%, 90% 중에서 선택해 주세요.')
+    if threshold not in YOLO_THRESHOLDS:
+        raise ValueError('YOLO 신뢰도는 40%, 70%, 90% 중에서 선택해 주세요.')
+    return threshold
 
 
 def parse_human_review(form):
@@ -498,7 +509,8 @@ def start_event_verification(job, candidates, center):
                  cached['vlm_answer'] if cached else None,
                   VLM_PROMPT_VERSION, VLM_PROMPT,
                   json.dumps({'prompt': VLM_PROMPT_VERSION, 'hashes': hashes,
-                              'yolo_condition': job.get('detection_mode', 'or').upper()}), json.dumps(evidence_names),
+                              'yolo_condition': job.get('detection_mode', 'or').upper(),
+                              'yolo_threshold': job.get('yolo_threshold', 40)}), json.dumps(evidence_names),
                   len(candidates), round(candidates[0]['video_second'], 3),
                   round(candidates[-1]['video_second'], 3), round(center[0], 6), round(center[1], 6),
                   round(dino_scores['fire'] * 100, 3), round(dino_scores['smoke'] * 100, 3),
@@ -576,7 +588,7 @@ def prepare_image_test_video(image_path, video_path):
         writer.release()
 
 
-def inspect_video(source_path, result_path):
+def inspect_video(source_path, result_path, confidence_threshold=0.40):
     capture = cv2.VideoCapture(str(source_path))
     if not capture.isOpened():
         raise ValueError('영상을 열 수 없습니다. 지원되는 영상 파일인지 확인하세요.')
@@ -604,7 +616,7 @@ def inspect_video(source_path, result_path):
                 if not ok:
                     break
                 result = model.predict(
-                    frame, conf=0.40, imgsz=640,
+                    frame, conf=confidence_threshold, imgsz=640,
                     classes=alert_class_ids(model), verbose=False,
                 )[0]
                 frame_has_alert = False
@@ -659,6 +671,7 @@ def generate_inspection_stream(job):
     metric_buckets = {}
     metric_started = time.perf_counter()
     metric_run_id = start_metric_run(job)
+    confidence_threshold = job.get('yolo_threshold', 40) / 100
     job['status'] = 'running'
     try:
         with _model_lock:
@@ -670,7 +683,7 @@ def generate_inspection_stream(job):
                 if not ok:
                     break
                 result = model.predict(
-                    frame, conf=0.40, imgsz=640,
+                    frame, conf=confidence_threshold, imgsz=640,
                     classes=alert_class_ids(model), verbose=False,
                 )[0]
                 frame_has_alert = False
@@ -801,6 +814,7 @@ def generate_inspection_stream(job):
         job['report'] = {
             'filename': job['original_name'],
             'detection_mode': job.get('detection_mode', 'or'),
+            'yolo_threshold': job.get('yolo_threshold', 40),
             'source_url': job.get('source_url'),
             'processed_frames': processed_frames,
             'total_frames': total_frames,
@@ -940,6 +954,11 @@ def inspect():
     detection_mode = request.form.get('detection_mode', 'or').lower()
     if detection_mode not in {'or', 'and'}:
         abort(400)
+    try:
+        yolo_threshold = parse_yolo_threshold(request.form)
+    except ValueError as exc:
+        flash(str(exc))
+        return redirect(url_for('home'))
     upload = None
     source_type = None
     if source_url:
@@ -989,6 +1008,7 @@ def inspect():
         'original_name': 'YouTube 영상' if source_url else Path(upload.filename).name,
         'source_type': source_type,
         'detection_mode': detection_mode,
+        'yolo_threshold': yolo_threshold,
         'source_url': source_url or None,
         'vlm_events': {},
         'status': 'downloading' if source_url else 'pending',
@@ -1006,7 +1026,8 @@ def inspect():
     if source_url:
         (RESULT_DIR / f'{token}_source.json').write_text(
             json.dumps({'source_url': source_url, 'job_token': token,
-                        'yolo_condition': detection_mode.upper()}, ensure_ascii=False), encoding='utf-8')
+                        'yolo_condition': detection_mode.upper(),
+                        'yolo_threshold': yolo_threshold}, ensure_ascii=False), encoding='utf-8')
         threading.Thread(target=download_youtube, args=(inspection_jobs[token], RESULT_DIR), daemon=True).start()
     session.pop('last_report', None)
     session['active_job'] = token

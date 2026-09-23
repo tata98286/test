@@ -11,6 +11,14 @@ from vlm_display import overlay, STATES
 
 
 class VideoFeaturesTest(unittest.TestCase):
+    def test_yolo_threshold_accepts_only_presentation_presets(self):
+        for value in ('40', '70', '90'):
+            self.assertEqual(module.parse_yolo_threshold({'yolo_threshold': value}), int(value))
+        self.assertEqual(module.parse_yolo_threshold({}), 40)
+        for value in ('', '41', '100', 'abc'):
+            with self.assertRaises(ValueError):
+                module.parse_yolo_threshold({'yolo_threshold': value})
+
     def test_human_review_requires_verdict_and_limits_notes(self):
         self.assertEqual(module.parse_human_review({'human_verdict':'fire', 'human_notes':'불꽃 확인'}),
                          ('FIRE', '불꽃 확인'))
@@ -131,7 +139,7 @@ class VideoFeaturesTest(unittest.TestCase):
             model.predict.return_value = [fake_result]
             job = {'source_path':source, 'result_path':target, 'original_name':'test', 'event_ids':[],
                    'pending_vlm':0, 'vlm_events':{1:{'event_id':1,'status':'confirmed','finished_at':time.monotonic()}},
-                   'latest_vlm_result':'confirmed'}
+                   'latest_vlm_result':'confirmed', 'yolo_threshold':70}
             with patch.object(module, 'get_model', return_value=model), patch.object(module, 'start_metric_run', return_value=0), patch.object(module, 'finish_metric_run'):
                 stream = module.generate_inspection_stream(job)
                 self.assertIn(b'Content-Type: image/jpeg', next(stream))
@@ -140,6 +148,8 @@ class VideoFeaturesTest(unittest.TestCase):
             self.assertEqual(job['status'], 'complete')
             self.assertTrue(job['report']['stopped_early'])
             self.assertEqual(job['report']['processed_frames'], 1)
+            self.assertEqual(job['report']['yolo_threshold'], 70)
+            self.assertEqual(model.predict.call_args.kwargs['conf'], .70)
             capture = cv2.VideoCapture(str(target))
             ok, image = capture.read()
             self.assertTrue(ok)

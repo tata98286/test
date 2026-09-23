@@ -26,6 +26,12 @@
         <label><input form="inspection-form" type="radio" name="detection_mode" value="or" {% if not job_token or current_job.detection_mode != 'and' %}checked{% endif %} {% if job_token %}disabled{% endif %}> 불 또는 연기 (OR) <small>민감하게</small></label>
         <label><input form="inspection-form" type="radio" name="detection_mode" value="and" {% if job_token and current_job.detection_mode == 'and' %}checked{% endif %} {% if job_token %}disabled{% endif %}> 불과 연기 모두 (AND) <small>엄격하게</small></label>
       </div>
+      <div class="condition-picker threshold-picker{% if job_token %} disabled{% endif %}">
+        <strong>YOLO 신뢰도</strong>
+        {% for threshold in (40, 70, 90) %}
+        <label><input form="inspection-form" type="radio" name="yolo_threshold" value="{{ threshold }}" {% if (job_token and current_job.yolo_threshold == threshold) or (not job_token and threshold == 40) %}checked{% endif %} {% if job_token %}disabled{% endif %}> {{ threshold }}%</label>
+        {% endfor %}
+      </div>
       {% if job_token %}
       <div class="live-head"><div><span class="live-dot"></span><strong>검사 중</strong></div><div class="live-actions"><strong id="live-progress">0%</strong><form id="stop-inspection-form" method="post" action="{{ url_for('inspection_stop', token=job_token) }}"><input type="hidden" name="csrf_token" value="{{ session['csrf_token'] }}"><button id="stop-inspection-button" class="stop-button" type="submit">여기까지 검사 종료</button></form></div></div>
       <div class="live-video"><img id="live-image" {% if current_job.status == 'pending' %}src="{{ url_for('inspection_stream', token=job_token) }}"{% endif %} alt="YOLO 실시간 화재 탐지 화면"></div>
@@ -37,7 +43,7 @@
       <p class="processing-note">VLM 판정은 응답 도착 시점부터 표시됩니다. 마지막 1초는 최종 판정 확인용 정지 화면입니다.</p>
       {% if report.stopped_early %}<div class="notice">사용자가 검사를 종료했습니다. 종료 지점까지의 결과입니다.</div>{% endif %}
       <div class="result-title"><div><span class="status {{ 'danger' if report.has_alert else 'safe' }}">{{ '화재·연기 감지' if report.has_alert else '이상 없음' }}</span><h2>검사 결과</h2></div><strong class="confidence">{{ report.max_alert_confidence }}%<small>최고 감지 신뢰도</small></strong></div>
-      <p class="processing-note">YOLO 조건: {{ '불과 연기 모두 (AND)' if report.detection_mode == 'and' else '불 또는 연기 (OR)' }}</p>
+      <p class="processing-note">YOLO 조건: {{ '불과 연기 모두 (AND)' if report.detection_mode == 'and' else '불 또는 연기 (OR)' }} · 신뢰도 {{ report.yolo_threshold or 40 }}%</p>
       <p class="confidence-help">영상 전체에서 AI가 불 또는 연기라고 가장 확실하게 판단한 탐지 결과입니다. 실제 화재 확률을 뜻하지는 않습니다.</p>
       <video controls preload="metadata" src="{{ url_for('inspection_result', filename=report.result_name) }}">결과 영상을 재생할 수 없습니다.</video>
       {% if report.evidence_names %}<div class="evidence-grid">{% for image_name in report.evidence_names %}<figure><img src="{{ url_for('inspection_result', filename=image_name) }}" alt="VLM 판단용 주요 장면 {{ loop.index }}"><figcaption>주요 장면 {{ loop.index }}</figcaption></figure>{% endfor %}</div>{% endif %}

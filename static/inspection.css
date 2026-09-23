@@ -70,6 +70,10 @@
   opacity: .72;
 }
 
+.threshold-picker {
+  margin-top: -6px;
+}
+
 .condition-picker > strong {
   flex: 0 0 auto;
   font-size: 13px;
