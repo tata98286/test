@@ -152,7 +152,7 @@ def classify_yolo_crops_with_dino(frame, boxes):
     model, heads = get_dino()
     height, width = frame.shape[:2]
     crops, valid_boxes = [], []
-    for x1, y1, x2, y2 in boxes:
+    for source_index, (x1, y1, x2, y2) in enumerate(boxes):
         pad_x, pad_y = int((x2 - x1) * heads.pad), int((y2 - y1) * heads.pad)
         left, top = max(0, int(x1) - pad_x), max(0, int(y1) - pad_y)
         right, bottom = min(width, int(x2) + pad_x), min(height, int(y2) + pad_y)
@@ -160,7 +160,7 @@ def classify_yolo_crops_with_dino(frame, boxes):
             crops.append(cv2.resize(
                 cv2.cvtColor(frame[top:bottom, left:right], cv2.COLOR_BGR2RGB),
                 (518, 518), interpolation=cv2.INTER_AREA))
-            valid_boxes.append((left, top, right, bottom))
+            valid_boxes.append((left, top, right, bottom, source_index))
     if not crops:
         return {'fire': 0.0, 'smoke': 0.0, 'lights': 0.0, 'clouds': 0.0,
                 'passed': False, 'threshold': heads.threshold, 'crops': []}
@@ -174,12 +174,14 @@ def classify_yolo_crops_with_dino(frame, boxes):
         cls = model(pixel_values=(pixels - mean) / std).last_hidden_state[:, 0]
         probs = torch.sigmoid(heads['aux'](cls)).float().cpu()
     results = []
-    for box, row in zip(valid_boxes, probs.tolist()):
+    for valid, row in zip(valid_boxes, probs.tolist()):
+        *box, source_index = valid
         v = dict(zip(heads.classes, row))
-        results.append({'box': box, 'scores': v,
+        results.append({'box': tuple(box), 'source_index': source_index, 'scores': v,
                         'passed': max(v['fire'], v['smoke']) >= heads.threshold})
     passed = [r for r in results if r['passed']]
-    frame_scores = {c: max((r['scores'][c] for r in passed), default=0.0)
+    # 차단된 crop도 분석/회귀 데이터에는 실제 점수가 필요하다.
+    frame_scores = {c: max((r['scores'][c] for r in results), default=0.0)
                     for c in heads.classes}
     frame_scores.update(passed=bool(passed), threshold=heads.threshold,
                         crops=results)
@@ -377,10 +379,6 @@ def run_vlm_for_event(job, event_id, frames):
     except Exception:
         app.logger.exception('VLM verification failed event=%s', event_id)
         verdict, answer = 'error', 'VLM 분석 중 오류가 발생했습니다. 서버 로그를 확인해 주세요.'
-    else:
-        import dino_learning
-        if verdict in ('false_alarm', 'confirmed'):
-            dino_learning.label_event_crops(event_id, 'vlm', verdict)
     try:
         connection = open_db_connection()
         try:
@@ -402,6 +400,14 @@ def run_vlm_for_event(job, event_id, frames):
     except Exception:
         app.logger.exception('VLM result persistence failed event=%s', event_id)
         verdict, answer = 'error', '판정 결과 DB 저장에 실패했습니다. 서버 로그를 확인해 주세요.'
+    else:
+        if verdict in ('false_alarm', 'confirmed'):
+            try:
+                import dino_learning
+                dino_learning.label_event_crops(event_id, 'vlm', verdict)
+            except Exception:
+                # 학습 데이터 적립 실패가 본 VLM 판정을 실패로 바꾸면 안 된다.
+                app.logger.exception('DINO auto-label failed event=%s source=vlm', event_id)
     finally:
         with _jobs_lock:
             record.update(status=verdict, answer=answer, finished_at=time.monotonic())
@@ -509,6 +515,7 @@ def start_event_verification(job, candidates, center):
                 if hashes_are_similar(hashes, old_hashes):
                     cached = old
                     break
+            connection.begin()
             cursor.execute(
                 '''INSERT INTO fire_event
                    (source_filename, yolo_confidence, vlm_result, vlm_answer,
@@ -542,20 +549,30 @@ def start_event_verification(job, candidates, center):
                     dino_light_score, dino_cloud_score, dino_threshold, dino_passed,
                     vlm_result, vlm_answer, photo_1_url, photo_2_url, photo_3_url)
                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,TRUE,%s,%s,%s,%s,%s)''',
-                (job['original_name'], round(max(item['confidence'] for item in selected) * 100, 1),
+                (event_id, job['original_name'], round(max(item['confidence'] for item in selected) * 100, 1),
                  round(dino_scores['fire'] * 100, 3), round(dino_scores['smoke'] * 100, 3),
                  round(dino_scores['lights'] * 100, 3), round(dino_scores['clouds'] * 100, 3),
                  round(candidates[0]['dino']['threshold'], 3),
                  cached['vlm_result'] if cached else None, cached['vlm_answer'] if cached else None,
                  photo_urls[0], photo_urls[1], photo_urls[2]),
             )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        for name in evidence_names:
+            (RESULT_DIR / name).unlink(missing_ok=True)
+        raise
     finally:
         connection.close()
 
     # ★ event_id 확정 후 — crop 자동 저장 (이전 코드에서 여기로 옮김)
-    import dino_learning
-    dino_learning.save_event_crops(job['token'], len(job['event_ids']) + 1,
-                                   selected, event_id)
+    try:
+        import dino_learning
+        dino_learning.save_event_crops(job['token'], len(job['event_ids']) + 1,
+                                       selected, event_id)
+    except Exception:
+        # 폐루프는 부가 기능이다. 실패해도 이벤트와 VLM 처리는 계속한다.
+        app.logger.exception('DINO crop collection failed event=%s', event_id)
 
     job.setdefault('vlm_events', {})[event_id] = {'event_id': event_id, 'status': 'queued'}
     job['event_ids'].append(event_id)
@@ -714,6 +731,7 @@ def generate_inspection_stream(job):
                 alert_centers = []
                 alert_boxes = []
                 alert_box_labels = []
+                alert_box_confidences = []
                 if result.boxes is not None:
                     for box in result.boxes:
                         class_id = int(box.cls.item())
@@ -729,6 +747,7 @@ def generate_inspection_stream(job):
                             alert_centers.append(((x1 + x2) / (2 * width), (y1 + y2) / (2 * height)))
                             alert_boxes.append((x1, y1, x2, y2))
                             alert_box_labels.append(label)
+                            alert_box_confidences.append(confidence)
                 if frame_has_alert:
                     alert_frames += 1
                 video_second = processed_frames / fps
@@ -789,7 +808,8 @@ def generate_inspection_stream(job):
                         'center': center,
                         'dino': dino,
                         'boxes': [tuple(b) for b in alert_boxes],
-                        'box_labels': list(alert_box_labels),  
+                        'box_labels': list(alert_box_labels),
+                        'box_confidences': list(alert_box_confidences),
                     })
                     event_candidates = [item for item in event_candidates if video_second - item['video_second'] <= EVENT_START_WINDOW_SECONDS]
                     if len(event_candidates) >= 5:
@@ -866,7 +886,6 @@ def generate_inspection_stream(job):
     except Exception as exc:
         app.logger.exception('Video inspection failed')
         job.update(status='error', error=f'검사 중 오류가 발생했습니다: {exc}')
-        result_path.unlink(missing_ok=True)
     finally:
         for event in active_events:
             try:
@@ -875,13 +894,21 @@ def generate_inspection_stream(job):
                 app.logger.exception('Failed to close event %s', event['event_id'])
         capture.release()
         writer.release()
+        if job.get('status') == 'error':
+            try:
+                result_path.unlink(missing_ok=True)
+            except OSError:
+                app.logger.exception('Failed to remove incomplete result %s', result_path)
         source_path.unlink(missing_ok=True)
         try:
             finish_metric_run(metric_run_id, job, metric_buckets, processed_frames, fps, time.perf_counter() - metric_started)
         except Exception:
             app.logger.exception('Failed to save inspection metrics')
-        import dino_learning
-        dino_learning.maybe_schedule_training()
+        try:
+            import dino_learning
+            dino_learning.maybe_schedule_training()
+        except Exception:
+            app.logger.exception('DINO training scheduling failed')
 
 
 def get_db():
@@ -1148,9 +1175,13 @@ def accept_event(event_id):
         raise
 
     # ★ 사람 판정으로 학습 라벨 확정 (JSON/redirect 공통 — 분기 앞)
-    import dino_learning
-    dino_learning.label_event_crops(event_id, 'human', verdict)
-    dino_learning.maybe_schedule_training()
+    try:
+        import dino_learning
+        dino_learning.label_event_crops(event_id, 'human', verdict)
+        dino_learning.maybe_schedule_training()
+    except Exception:
+        # 접수 결과는 이미 확정됐다. 학습 부가 기능 실패로 500을 반환하지 않는다.
+        app.logger.exception('DINO human labeling failed event=%s', event_id)
 
     if request.headers.get('Accept') == 'application/json':
         return jsonify(ok=True)

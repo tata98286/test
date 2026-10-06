@@ -48,6 +48,26 @@ def init(connection_factory, base_checkpoint_path, reload_hook, model_accessor):
     _base_ckpt = Path(base_checkpoint_path)
     _reload_hook = reload_hook
     _model_accessor = model_accessor
+    # 배포 버전은 프로세스 재시작 뒤에도 유지한다. 테이블이 아직 준비되지
+    # 않은 설치에서는 base 체크포인트로 정상 기동하고 상태에 경고만 남긴다.
+    try:
+        conn = _db()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    'SELECT checkpoint_path FROM dino_model_version '
+                    'WHERE deployed=1 ORDER BY version_id DESC LIMIT 1')
+                active = cursor.fetchone()
+        finally:
+            conn.close()
+        if active:
+            checkpoint = Path(active['checkpoint_path'])
+            if checkpoint.is_file():
+                _reload_hook(checkpoint)
+            else:
+                _state['startup_warning'] = f'배포 체크포인트 없음: {checkpoint}'
+    except Exception as exc:
+        _state['startup_warning'] = f'배포 버전 조회 실패: {type(exc).__name__}'
 
 
 def _db():
@@ -61,7 +81,10 @@ def save_event_crops(job_token, event_seq, candidates, event_id=None):
     """이벤트 대표 후보들의 각 bbox crop을 저장하고 PENDING 행 적립.
     candidates: start_event_verification의 selected — 각 항목은
     'frame', 'boxes', 'box_labels', 'video_second', 'dino' 보유."""
+    if event_id is None:
+        raise ValueError('crop 저장에는 확정된 event_id가 필요합니다.')
     rows = []
+    written_paths = []
     for cand_idx, item in enumerate(candidates):
         dino = item.get('dino') or {}
         per_crop = dino.get('crops') or []
@@ -72,10 +95,15 @@ def save_event_crops(job_token, event_seq, candidates, event_id=None):
                 continue
             name = f"{job_token}_e{event_seq}_c{cand_idx}_{crop_idx}.jpg"
             path = CROP_DIR / name
-            cv2.imwrite(str(path), frame[y1:y2, x1:x2])
+            if not cv2.imwrite(str(path), frame[y1:y2, x1:x2]):
+                continue
+            written_paths.append(path)
+            source_idx = int(info.get('source_index', crop_idx))
             labels_list = item.get('box_labels') or []
-            yolo_label = labels_list[crop_idx] if crop_idx < len(labels_list) else None
-            yolo_conf = None
+            confidence_list = item.get('box_confidences') or []
+            yolo_label = labels_list[source_idx] if source_idx < len(labels_list) else None
+            yolo_conf = (round(float(confidence_list[source_idx]), 5)
+                         if source_idx < len(confidence_list) else None)
             rows.append((
                 event_id, name, round(float(item.get('video_second', 0)), 3),
                 str(path), yolo_label, yolo_conf,
@@ -91,6 +119,10 @@ def save_event_crops(job_token, event_seq, candidates, event_id=None):
                    (event_id, source_filename, video_second, crop_path,
                     yolo_label, yolo_conf, dino_scores, status)
                    VALUES (%s,%s,%s,%s,%s,%s,%s,'PENDING')''', rows)
+    except Exception:
+        for path in written_paths:
+            path.unlink(missing_ok=True)
+        raise
     finally:
         conn.close()
 
@@ -229,13 +261,19 @@ def _training_run():
             conn.close()
         anchor = _load_bundle_labels('anchor')
         eval_set = _load_bundle_labels('eval')
+        if not mined:
+            _state['last_result'] = {'ok': False, 'reason': '확정된 신규 라벨 없음'}
+            _state['last_run_at'] = str(datetime.now())
+            return
         if not anchor:
             _state['last_result'] = {'ok': False,
                                      'reason': 'anchor 번들 없음 — Colab 반출 필요'}
+            _state['last_run_at'] = str(datetime.now())
             return
         if not eval_set:
             _state['last_result'] = {'ok': False,
                                      'reason': 'eval 번들 없음 — 회귀 게이트 불가'}
+            _state['last_run_at'] = str(datetime.now())
             return
 
         pairs = ([(Path(r['crop_path']), json.loads(r['label'])) for r in mined]
@@ -247,6 +285,12 @@ def _training_run():
         emb = _embed(paths, _model_accessor)
         ev_paths = [p for p, _ in eval_set]
         ev_labels = torch.tensor([l for _, l in eval_set], dtype=torch.float32)
+        eval_positive = (ev_labels[:, 0] + ev_labels[:, 1]) > 0
+        if not bool(eval_positive.any()) or not bool((~eval_positive).any()):
+            _state['last_result'] = {
+                'ok': False, 'reason': 'eval 번들에는 양성과 음성이 모두 필요'}
+            _state['last_run_at'] = str(datetime.now())
+            return
         ev_emb = _embed(ev_paths, _model_accessor)
 
         # ---- 3. base 헤드 로드 → 여기서부터 미세조정 ----
@@ -326,7 +370,9 @@ def _training_run():
 
             conn = _db()
             try:
+                conn.begin()
                 with conn.cursor() as cursor:
+                    cursor.execute('UPDATE dino_model_version SET deployed=0 WHERE deployed=1')
                     cursor.execute(
                         'INSERT INTO dino_model_version '
                         '(checkpoint_path, num_mined, num_anchor, metrics, deployed) '
@@ -335,6 +381,10 @@ def _training_run():
                     cursor.execute(
                         "UPDATE dino_training_sample SET status='USED' "
                         "WHERE status='LABELED'")
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
             finally:
                 conn.close()
             _reload_hook(out)     # app: _dino_model 리셋 → 다음 호출부터 새 버전
@@ -349,4 +399,21 @@ def _training_run():
 
 
 def status():
-    return {'config': CFG, 'state': _state}
+    def bundle_count(kind):
+        try:
+            return len(_load_bundle_labels(kind))
+        except Exception:
+            return 0
+
+    anchor_count = bundle_count('anchor')
+    eval_count = bundle_count('eval')
+    return {
+        'config': CFG,
+        'readiness': {
+            'base_checkpoint': bool(_base_ckpt and _base_ckpt.is_file()),
+            'anchor_count': anchor_count,
+            'eval_count': eval_count,
+            'auto_training_ready': bool(CFG['enabled'] and anchor_count and eval_count),
+        },
+        'state': _state,
+    }
