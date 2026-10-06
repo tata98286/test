@@ -151,39 +151,28 @@ def classify_yolo_crops_with_dino(frame, boxes):
     import torch
     model, heads = get_dino()
     height, width = frame.shape[:2]
-    crops, valid_boxes = [], []
+    crops = []
     for x1, y1, x2, y2 in boxes:
-        pad_x, pad_y = int((x2 - x1) * heads.pad), int((y2 - y1) * heads.pad)
-        left, top = max(0, int(x1) - pad_x), max(0, int(y1) - pad_y)
-        right, bottom = min(width, int(x2) + pad_x), min(height, int(y2) + pad_y)
+        pad_x, pad_y = (x2 - x1) * heads.pad, (y2 - y1) * heads.pad
+        left, top = max(0, int(x1 - pad_x)), max(0, int(y1 - pad_y))
+        right, bottom = min(width, int(x2 + pad_x)), min(height, int(y2 + pad_y))
         if right > left and bottom > top:
-            crops.append(cv2.resize(
-                cv2.cvtColor(frame[top:bottom, left:right], cv2.COLOR_BGR2RGB),
-                (518, 518), interpolation=cv2.INTER_AREA))
-            valid_boxes.append((left, top, right, bottom))
+            crop = cv2.cvtColor(frame[top:bottom, left:right], cv2.COLOR_BGR2RGB)
+            crop = cv2.resize(crop, (518, 518), interpolation=cv2.INTER_AREA)
+            crops.append(crop)
     if not crops:
-        return {'fire': 0.0, 'smoke': 0.0, 'lights': 0.0, 'clouds': 0.0,
-                'passed': False, 'threshold': heads.threshold, 'crops': []}
+        return {'fire': 0.0, 'smoke': 0.0, 'lights': 0.0, 'clouds': 0.0, 'passed': False, 'threshold': heads.threshold}
     device = next(model.parameters()).device
     dtype = next(model.parameters()).dtype
-    pixels = torch.from_numpy(__import__('numpy').stack(crops)).to(
-        device=device, dtype=dtype).permute(0, 3, 1, 2) / 255.0
+    pixels = torch.from_numpy(__import__('numpy').stack(crops)).to(device=device, dtype=dtype).permute(0, 3, 1, 2) / 255.0
     mean = torch.tensor([0.485, 0.456, 0.406], device=device, dtype=dtype)[None, :, None, None]
     std = torch.tensor([0.229, 0.224, 0.225], device=device, dtype=dtype)[None, :, None, None]
     with torch.inference_mode():
         cls = model(pixel_values=(pixels - mean) / std).last_hidden_state[:, 0]
-        probs = torch.sigmoid(heads['aux'](cls)).float().cpu()
-    results = []
-    for box, row in zip(valid_boxes, probs.tolist()):
-        v = dict(zip(heads.classes, row))
-        results.append({'box': box, 'scores': v,
-                        'passed': max(v['fire'], v['smoke']) >= heads.threshold})
-    passed = [r for r in results if r['passed']]
-    frame_scores = {c: max((r['scores'][c] for r in passed), default=0.0)
-                    for c in heads.classes}
-    frame_scores.update(passed=bool(passed), threshold=heads.threshold,
-                        crops=results)
-    return frame_scores
+        scores = torch.sigmoid(heads['aux'](cls)).amax(dim=0).float().cpu().tolist()
+    values = dict(zip(heads.classes, scores))
+    values.update(passed=max(values['fire'], values['smoke']) >= heads.threshold, threshold=heads.threshold)
+    return values
 
 
 def plot_alerts(result):
@@ -377,10 +366,6 @@ def run_vlm_for_event(job, event_id, frames):
     except Exception:
         app.logger.exception('VLM verification failed event=%s', event_id)
         verdict, answer = 'error', 'VLM 분석 중 오류가 발생했습니다. 서버 로그를 확인해 주세요.'
-    else:
-        import dino_learning
-        if verdict in ('false_alarm', 'confirmed'):
-            dino_learning.label_event_crops(event_id, 'vlm', verdict)
     try:
         connection = open_db_connection()
         try:
@@ -476,7 +461,6 @@ def end_event(event_id):
             )
     finally:
         connection.close()
-        
 
 
 def start_event_verification(job, candidates, center):
@@ -542,7 +526,7 @@ def start_event_verification(job, candidates, center):
                     dino_light_score, dino_cloud_score, dino_threshold, dino_passed,
                     vlm_result, vlm_answer, photo_1_url, photo_2_url, photo_3_url)
                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,TRUE,%s,%s,%s,%s,%s)''',
-                (job['original_name'], round(max(item['confidence'] for item in selected) * 100, 1),
+                (event_id, job['original_name'], round(max(item['confidence'] for item in selected) * 100, 1),
                  round(dino_scores['fire'] * 100, 3), round(dino_scores['smoke'] * 100, 3),
                  round(dino_scores['lights'] * 100, 3), round(dino_scores['clouds'] * 100, 3),
                  round(candidates[0]['dino']['threshold'], 3),
@@ -551,12 +535,6 @@ def start_event_verification(job, candidates, center):
             )
     finally:
         connection.close()
-
-    # ★ event_id 확정 후 — crop 자동 저장 (이전 코드에서 여기로 옮김)
-    import dino_learning
-    dino_learning.save_event_crops(job['token'], len(job['event_ids']) + 1,
-                                   selected, event_id)
-
     job.setdefault('vlm_events', {})[event_id] = {'event_id': event_id, 'status': 'queued'}
     job['event_ids'].append(event_id)
     job['evidence_names'] = evidence_names
@@ -713,7 +691,6 @@ def generate_inspection_stream(job):
                 detected_labels = set()
                 alert_centers = []
                 alert_boxes = []
-                alert_box_labels = []
                 if result.boxes is not None:
                     for box in result.boxes:
                         class_id = int(box.cls.item())
@@ -728,7 +705,6 @@ def generate_inspection_stream(job):
                             x1, y1, x2, y2 = box.xyxy[0].tolist()
                             alert_centers.append(((x1 + x2) / (2 * width), (y1 + y2) / (2 * height)))
                             alert_boxes.append((x1, y1, x2, y2))
-                            alert_box_labels.append(label)
                 if frame_has_alert:
                     alert_frames += 1
                 video_second = processed_frames / fps
@@ -788,8 +764,6 @@ def generate_inspection_stream(job):
                         'frame': frame.copy(),
                         'center': center,
                         'dino': dino,
-                        'boxes': [tuple(b) for b in alert_boxes],
-                        'box_labels': list(alert_box_labels),  
                     })
                     event_candidates = [item for item in event_candidates if video_second - item['video_second'] <= EVENT_START_WINDOW_SECONDS]
                     if len(event_candidates) >= 5:
@@ -880,8 +854,6 @@ def generate_inspection_stream(job):
             finish_metric_run(metric_run_id, job, metric_buckets, processed_frames, fps, time.perf_counter() - metric_started)
         except Exception:
             app.logger.exception('Failed to save inspection metrics')
-        import dino_learning
-        dino_learning.maybe_schedule_training()
 
 
 def get_db():
@@ -1146,12 +1118,6 @@ def accept_event(event_id):
     except Exception:
         connection.rollback()
         raise
-
-    # ★ 사람 판정으로 학습 라벨 확정 (JSON/redirect 공통 — 분기 앞)
-    import dino_learning
-    dino_learning.label_event_crops(event_id, 'human', verdict)
-    dino_learning.maybe_schedule_training()
-
     if request.headers.get('Accept') == 'application/json':
         return jsonify(ok=True)
     return redirect(url_for('home') + '#event-board')
@@ -1251,37 +1217,6 @@ def file_too_large(error):
     flash('영상 파일은 최대 500MB까지 업로드할 수 있습니다.')
     return redirect(url_for('home'))
 
-import dino_learning
-
-def _dino_reload(new_path):
-    global _dino_model, _dino_heads, DINO_MODEL_PATH
-    with _dino_lock:
-        _dino_model, _dino_heads = None, None
-        DINO_MODEL_PATH = Path(new_path)
-
-def _dino_use(fn):
-    with _dino_lock:
-        model, heads = get_dino()
-        return fn(model, heads)
-
-dino_learning.init(open_db_connection, DINO_MODEL_PATH,
-                   reload_hook=_dino_reload, model_accessor=_dino_use)
-
-@app.get('/dino-training/status')
-@login_required
-def dino_training_status():
-    return jsonify(dino_learning.status())
-
-@app.post('/dino-training/trigger')
-@login_required
-def dino_training_trigger():
-    with get_db().cursor() as cursor:
-        cursor.execute('SELECT role FROM `user` WHERE user_id=%s', (session['user_id'],))
-        user = cursor.fetchone()
-        if not user or user['role'] != 'ADMIN':
-            abort(403)
-    dino_learning.maybe_schedule_training(force=True)
-    return jsonify(ok=True)
 
 if __name__ == '__main__':
     app.run(
