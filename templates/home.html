@@ -3,13 +3,15 @@
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='inspection.css') }}">
 <section class="inspection">
-  <div class="dashboard-head"><div><span class="eyebrow">AI FIRE DETECTION</span><h1>화재 검사</h1><p class="muted">YOLO 모델로 영상과 이미지 속 화재와 연기를 탐지합니다.</p></div><div class="user-box"><strong>{{ user.username }}</strong><span>{{ user.role }}</span><form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ session['csrf_token'] }}"><button class="ghost-button" type="submit">로그아웃</button></form></div></div>
+  <div class="dashboard-head"><div><span class="eyebrow">AI FIRE DETECTION</span><h1>화재 검사</h1><p class="muted">여러 AI 모델이 영상과 이미지 속 화재·연기를 단계별로 탐지하고 검증합니다.</p></div><div class="user-box"><strong>{{ user.username }}</strong><span>{{ user.role }}</span><form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ session['csrf_token'] }}"><button class="ghost-button" type="submit">로그아웃</button></form></div></div>
   {% for message in get_flashed_messages() %}<div class="error" role="alert">{{ message }}</div>{% endfor %}
   <div class="inspection-grid">
     <article class="upload-card">
       <h2>검사할 영상</h2><p class="muted">영상 또는 이미지 파일 · 최대 500MB</p>
       <form id="inspection-form" method="post" action="{{ url_for('inspect') }}" enctype="multipart/form-data">
         <input type="hidden" name="csrf_token" value="{{ session['csrf_token'] }}">
+        <input type="hidden" id="vlm-prompt-mode" name="vlm_prompt_mode" value="{{ current_job.vlm_prompt_mode or 'fixed' }}">
+        <input type="hidden" id="vlm-test-prompt-value" name="vlm_test_prompt" value="">
         <label class="file-picker" for="media"><span class="file-icon">▶</span><strong>영상/이미지 파일 선택</strong><small>영상이나 이미지 한 개를 선택하세요.</small></label>
         <input class="file-input" id="media" name="media" type="file" accept="video/mp4,video/x-msvideo,video/quicktime,video/x-matroska,video/webm,.m4v,image/jpeg,image/png,image/webp,image/bmp">
         <label for="youtube-url">또는 YouTube 영상 주소</label>
@@ -20,7 +22,8 @@
       <p class="processing-note">영상 길이와 PC 성능에 따라 검사에 시간이 걸릴 수 있습니다. 완료될 때까지 이 창을 닫지 마세요.</p>
     </article>
     <article class="result-card">
-      <div class="inspection-mode-head"><strong>실시간 AI 검사</strong></div>
+      <div class="inspection-mode-head"><strong>실시간 AI 검사</strong><button type="button" id="open-vlm-prompt" class="prompt-open">VLM 프롬프트</button></div>
+      <p id="vlm-prompt-mode-label" class="processing-note">VLM · {{ '테스트 프롬프트' if current_job.vlm_prompt_mode == 'test' else '고정 프롬프트' }}</p>
       <div class="condition-picker{% if job_token %} disabled{% endif %}">
         <strong>YOLO 이벤트 조건</strong>
         <label><input form="inspection-form" type="radio" name="detection_mode" value="or" {% if not job_token or current_job.detection_mode != 'and' %}checked{% endif %} {% if job_token %}disabled{% endif %}> 불 또는 연기 (OR) <small>민감하게</small></label>
@@ -36,14 +39,17 @@
       <div class="live-head"><div><span class="live-dot"></span><strong>검사 중</strong></div><div class="live-actions"><strong id="live-progress">0%</strong><form id="stop-inspection-form" method="post" action="{{ url_for('inspection_stop', token=job_token) }}"><input type="hidden" name="csrf_token" value="{{ session['csrf_token'] }}"><button id="stop-inspection-button" class="stop-button" type="submit">여기까지 검사 종료</button></form></div></div>
       <div class="live-video"><img id="live-image" {% if current_job.status == 'pending' %}src="{{ url_for('inspection_stream', token=job_token) }}"{% endif %} alt="YOLO 실시간 화재 탐지 화면"></div>
       <p class="processing-note">분석된 프레임이 바로 표시됩니다. 완료되면 결과 요약 화면으로 자동 전환됩니다.</p>
+      <p id="yolo-live-scores" class="processing-note">YOLO · 불: 대기 · 연기: 대기</p>
       <p id="vlm-live-status" role="status">AI 후보 감지를 기다리고 있습니다.</p>
       <div id="stream-config" data-stream-url="{{ url_for('inspection_stream', token=job_token) }}" data-status-url="{{ url_for('inspection_status', token=job_token) }}"></div>
       {% elif report %}
       {% if report.source_url %}<p><a href="{{ report.source_url }}" target="_blank" rel="noopener">YouTube 원본 영상</a></p>{% endif %}
       <p class="processing-note">VLM 판정은 응답 도착 시점부터 표시됩니다. 마지막 1초는 최종 판정 확인용 정지 화면입니다.</p>
       {% if report.stopped_early %}<div class="notice">사용자가 검사를 종료했습니다. 종료 지점까지의 결과입니다.</div>{% endif %}
-      <div class="result-title"><div><span class="status {{ 'danger' if report.has_alert else 'safe' }}">{{ '화재·연기 감지' if report.has_alert else '이상 없음' }}</span><h2>검사 결과</h2></div><strong class="confidence">{{ report.max_alert_confidence }}%<small>최고 감지 신뢰도</small></strong></div>
+      <div class="result-title"><div><span class="status {{ 'danger' if report.has_alert else 'safe' }}">{{ '화재·연기 감지' if report.has_alert else '이상 없음' }}</span><h2>검사 결과</h2></div><strong class="confidence">{{ report.max_alert_confidence|percent_up }}%<small>최고 감지 신뢰도</small></strong></div>
       <p class="processing-note">YOLO 조건: {{ '불과 연기 모두 (AND)' if report.detection_mode == 'and' else '불 또는 연기 (OR)' }} · 신뢰도 {{ report.yolo_threshold or 40 }}%</p>
+      <p class="processing-note">사용한 VLM: {{ '테스트 프롬프트' if report.vlm_prompt_mode == 'test' else '고정 프롬프트' }}{% if report.vlm_prompt_version %} · 버전 {{ report.vlm_prompt_version }}{% endif %}</p>
+      <p class="processing-note">YOLO 최고 신뢰도 · {% for name, label in [('fire', '불'), ('smoke', '연기')] %}{{ label }}: {% if report.class_confidences is defined and report.class_confidences.get(name) is not none %}{{ report.class_confidences[name]|percent_up }}%{% else %}미검출{% endif %}{{ ' · ' if not loop.last }}{% endfor %}</p>
       <p class="confidence-help">영상 전체에서 AI가 불 또는 연기라고 가장 확실하게 판단한 탐지 결과입니다. 실제 화재 확률을 뜻하지는 않습니다.</p>
       <video controls preload="metadata" src="{{ url_for('inspection_result', filename=report.result_name) }}">결과 영상을 재생할 수 없습니다.</video>
       {% if report.evidence_names %}<div class="evidence-grid">{% for image_name in report.evidence_names %}<figure><img src="{{ url_for('inspection_result', filename=image_name) }}" alt="VLM 판단용 주요 장면 {{ loop.index }}"><figcaption>주요 장면 {{ loop.index }}</figcaption></figure>{% endfor %}</div>{% endif %}
@@ -61,5 +67,18 @@
     <div class="event-table-wrap"><table class="event-table"><thead><tr><th>이벤트 ID</th><th>감지 일시</th><th>모니터링</th><th>YOLO</th><th>DINO</th><th>VLM 2차 판정</th><th>상태</th><th>처리</th></tr></thead><tbody id="event-rows">{% include '_event_rows.html' %}</tbody></table></div>
   </section>
 </section>
+<dialog id="vlm-prompt-dialog" class="prompt-dialog" data-running="{{ 'true' if job_token else 'false' }}">
+  <div class="prompt-dialog-head"><div><h2>VLM 프롬프트</h2><p class="muted">고정 프롬프트와 테스트 프롬프트를 비교하고 선택하세요.</p></div><button type="button" id="close-vlm-prompt" class="prompt-open" aria-label="닫기">닫기</button></div>
+  <div class="prompt-columns">
+    <section><h3>현재 고정 프롬프트</h3><p class="processing-note">기본 사용 · 버전 {{ fixed_vlm_version }}</p><textarea id="vlm-fixed-prompt" readonly aria-label="현재 고정 프롬프트">{{ fixed_vlm_prompt }}</textarea></section>
+    <section><h3>테스트 프롬프트</h3><p class="processing-note">수정 가능 · 최대 4,000자</p><textarea id="vlm-test-prompt" maxlength="4000" aria-label="테스트 프롬프트" placeholder="고정 프롬프트를 복사하거나 새 프롬프트를 입력하세요."></textarea><button type="button" id="copy-fixed-prompt" class="prompt-open">고정 프롬프트 복사</button></section>
+  </div>
+  <p class="processing-note">화재 판정은 yes 또는 no로 응답하도록 작성해 주세요. 장면 설명 검증 단계는 기존 방식으로 진행됩니다.</p>
+  <fieldset class="prompt-mode-picker"><legend>다음 검사에 사용할 프롬프트</legend><label><input type="radio" name="prompt-choice" value="fixed" checked> 고정 프롬프트 (기본)</label><label><input type="radio" name="prompt-choice" value="test"> 테스트 프롬프트</label></fieldset>
+  {% if job_token %}<details class="vlm-details"><summary>현재 검사에 적용된 프롬프트</summary><pre>{{ current_job.vlm_prompt or fixed_vlm_prompt }}</pre></details>{% endif %}
+  <p id="prompt-dialog-message" role="status" class="processing-note">고정 프롬프트는 변경되지 않습니다. 테스트 초안은 이 브라우저에 저장됩니다.</p>
+  <button type="button" id="apply-vlm-prompt">선택 적용</button>
+</dialog>
 <script src="{{ url_for('static', filename='inspection.js') }}"></script>
+<script src="{{ url_for('static', filename='vlm-prompt.js') }}"></script>
 {% endblock %}

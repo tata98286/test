@@ -11,6 +11,7 @@ import subprocess
 from video_sources import youtube_url, download_youtube
 from vlm_display import overlay, feedback, STATES
 from datetime import timedelta
+from decimal import Decimal, ROUND_CEILING
 from functools import wraps
 from pathlib import Path
 
@@ -62,6 +63,26 @@ EVENT_LOCATION_DISTANCE = 0.20
 DINO_MODEL_PATH = Path(os.getenv('DINO_MODEL_PATH', r'C:\its\model\full_crop_gate_multilabel.pt'))
 HUMAN_VERDICTS = {'FIRE', 'FALSE_ALARM', 'UNCERTAIN'}
 YOLO_THRESHOLDS = {40, 70, 90}
+
+
+
+def percent_ceiling(value):
+    return float(Decimal(str(value)).quantize(Decimal('0.1'), rounding=ROUND_CEILING))
+
+
+@app.template_filter('percent_up')
+def format_percent_up(value):
+    return f'{percent_ceiling(value):.1f}'
+
+
+def select_vlm_prompt(form):
+    mode = form.get('vlm_prompt_mode', 'fixed')
+    if mode not in {'fixed', 'test'}:
+        raise ValueError('VLM 프롬프트 모드를 확인해 주세요.')
+    prompt = VLM_PROMPT if mode == 'fixed' else form.get('vlm_test_prompt', '').strip()
+    if not prompt or len(prompt) > 4000:
+        raise ValueError('테스트 프롬프트는 1~4000자로 입력해 주세요.')
+    return mode, prompt, hashlib.sha256(prompt.encode()).hexdigest()[:16]
 
 
 def login_required(view):
@@ -185,7 +206,7 @@ def plot_alerts(result):
         label = result.names[class_id]
         x1, y1, x2, y2 = (int(value) for value in box.xyxy[0].tolist())
         color = (0, 0, 255) if label == 'fire' else (0, 165, 255)
-        caption = f'{label.upper()} {confidence * 100:.0f}%'
+        caption = f'{label.upper()} {format_percent_up(confidence * 100)}%'
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
         (text_width, text_height), baseline = cv2.getTextSize(
             caption, cv2.FONT_HERSHEY_SIMPLEX, 0.65, 2
@@ -329,7 +350,8 @@ def parse_vlm_response(answer):
     return None
 
 
-def classify_with_vlm(frames, details=None):
+def classify_with_vlm(frames, details=None, prompt=None):
+    selected_prompt = VLM_PROMPT if prompt is None else prompt
     import torch
     from PIL import Image
     model, processor = get_vlm()
@@ -343,12 +365,12 @@ def classify_with_vlm(frames, details=None):
         inputs = processor(text=[text], images=images if use_images else None, padding=True, return_tensors='pt')
         inputs = {key: value.to(model.device) for key, value in inputs.items()}
         with torch.inference_mode():
-            output_ids = model.generate(**inputs, max_new_tokens=50 if prompt == VLM_PROMPT else 160)
+            output_ids = model.generate(**inputs, max_new_tokens=50 if prompt == selected_prompt else 160)
         generated = [output[len(source):] for source, output in zip(inputs['input_ids'], output_ids)]
         return processor.batch_decode(generated, skip_special_tokens=True)[0].strip()
 
     from independent_description import judge_with_description
-    verdict, answer, bilingual = judge_with_description(generate_answer, VLM_PROMPT)
+    verdict, answer, bilingual = judge_with_description(generate_answer, selected_prompt)
     if details is not None:
         details.update(bilingual)
     return verdict, answer[:500]
@@ -362,7 +384,10 @@ def run_vlm_for_event(job, event_id, frames):
     app.logger.info('VLM start event=%s frames=%s', event_id, len(frames))
     try:
         with _vlm_lock:
-            verdict, answer = classify_with_vlm(frames, details=bilingual)
+            if job.get('vlm_prompt_mode') == 'test':
+                verdict, answer = classify_with_vlm(frames, details=bilingual, prompt=job['vlm_prompt'])
+            else:
+                verdict, answer = classify_with_vlm(frames, details=bilingual)
     except Exception:
         app.logger.exception('VLM verification failed event=%s', event_id)
         verdict, answer = 'error', 'VLM 분석 중 오류가 발생했습니다. 서버 로그를 확인해 주세요.'
@@ -372,7 +397,7 @@ def run_vlm_for_event(job, event_id, frames):
             with connection.cursor() as cursor:
                 cursor.execute(
                     'UPDATE fire_event SET vlm_result=%s, vlm_answer=%s, vlm_prompt_version=%s, vlm_prompt=%s WHERE event_id=%s',
-                    (verdict, answer, VLM_PROMPT_VERSION, VLM_PROMPT, event_id))
+                    (verdict, answer, job.get('vlm_prompt_version', VLM_PROMPT_VERSION), job.get('vlm_prompt', VLM_PROMPT), event_id))
                 cursor.execute('UPDATE model_comparison_event SET vlm_result=%s, vlm_answer=%s WHERE event_id=%s',
                                (verdict, answer, event_id))
                 cursor.execute('''INSERT INTO vlm_language_result
@@ -442,10 +467,11 @@ def update_event_detection(event, video_second, confidence, center):
                 '''UPDATE fire_event
                    SET last_detected_at=CURRENT_TIMESTAMP, video_last_seen_seconds=%s,
                        yolo_confidence=GREATEST(yolo_confidence, %s), detection_count=%s,
-                       location_x=%s, location_y=%s
+                       location_x=%s, location_y=%s,
+                       event_hashes=JSON_SET(COALESCE(event_hashes, '{}'), '$.yolo_scores', JSON_EXTRACT(%s, '$'))
                    WHERE event_id=%s AND event_state='ACTIVE' ''',
-                (round(video_second, 3), round(confidence * 100, 1), event['detection_count'],
-                 round(center[0], 6), round(center[1], 6), event['event_id']),
+                (round(video_second, 3), percent_ceiling(confidence * 100), event['detection_count'],
+                 round(center[0], 6), round(center[1], 6), json.dumps(event.get('yolo_scores', {})), event['event_id']),
             )
     finally:
         connection.close()
@@ -464,6 +490,8 @@ def end_event(event_id):
 
 
 def start_event_verification(job, candidates, center):
+    selected_prompt = job.get('vlm_prompt', VLM_PROMPT)
+    selected_version = job.get('vlm_prompt_version', VLM_PROMPT_VERSION)
     selected = sorted(candidates, key=lambda item: item['frame_index'])
     frames = [item['frame'] for item in selected]
     hashes = [perceptual_hash(frame) for frame in frames]
@@ -485,7 +513,7 @@ def start_event_verification(job, candidates, center):
             )
             for old in cursor.fetchall():
                 cached_data = json.loads(old['event_hashes'])
-                if not isinstance(cached_data, dict) or cached_data.get('prompt') != VLM_PROMPT_VERSION:
+                if not isinstance(cached_data, dict) or cached_data.get('prompt') != selected_version:
                     continue
                 if len([line for line in (old['vlm_answer'] or '').splitlines() if line.strip()]) < 2:
                     continue
@@ -504,17 +532,18 @@ def start_event_verification(job, candidates, center):
                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s,
                            'ACTIVE', CURRENT_TIMESTAMP, %s, %s, %s, %s, %s,
                            %s, %s, %s, %s, %s, TRUE, %s, %s)''',
-                (job['original_name'], round(max(item['confidence'] for item in selected) * 100, 1),
+                (job['original_name'], percent_ceiling(max(item['confidence'] for item in selected) * 100),
                  cached['vlm_result'] if cached else None,
                  cached['vlm_answer'] if cached else None,
-                  VLM_PROMPT_VERSION, VLM_PROMPT,
-                  json.dumps({'prompt': VLM_PROMPT_VERSION, 'hashes': hashes,
+                  selected_version, selected_prompt,
+                  json.dumps({'prompt': selected_version, 'prompt_mode': job.get('vlm_prompt_mode', 'fixed'), 'hashes': hashes,
                               'yolo_condition': job.get('detection_mode', 'or').upper(),
-                              'yolo_threshold': job.get('yolo_threshold', 40)}), json.dumps(evidence_names),
+                              'yolo_threshold': job.get('yolo_threshold', 40),
+                              'yolo_scores': {name: max((item.get('yolo_scores', {}).get(name) for item in candidates if item.get('yolo_scores', {}).get(name) is not None), default=None) for name in ('fire', 'smoke')}}), json.dumps(evidence_names),
                   len(candidates), round(candidates[0]['video_second'], 3),
                   round(candidates[-1]['video_second'], 3), round(center[0], 6), round(center[1], 6),
-                  round(dino_scores['fire'] * 100, 3), round(dino_scores['smoke'] * 100, 3),
-                  round(dino_scores['lights'] * 100, 3), round(dino_scores['clouds'] * 100, 3),
+                  percent_ceiling(dino_scores['fire'] * 100), percent_ceiling(dino_scores['smoke'] * 100),
+                  percent_ceiling(dino_scores['lights'] * 100), percent_ceiling(dino_scores['clouds'] * 100),
                   round(candidates[0]['dino']['threshold'], 3), len(candidates), len(candidates)),
             )
             event_id = cursor.lastrowid
@@ -526,9 +555,9 @@ def start_event_verification(job, candidates, center):
                     dino_light_score, dino_cloud_score, dino_threshold, dino_passed,
                     vlm_result, vlm_answer, photo_1_url, photo_2_url, photo_3_url)
                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,TRUE,%s,%s,%s,%s,%s)''',
-                (event_id, job['original_name'], round(max(item['confidence'] for item in selected) * 100, 1),
-                 round(dino_scores['fire'] * 100, 3), round(dino_scores['smoke'] * 100, 3),
-                 round(dino_scores['lights'] * 100, 3), round(dino_scores['clouds'] * 100, 3),
+                (event_id, job['original_name'], percent_ceiling(max(item['confidence'] for item in selected) * 100),
+                 percent_ceiling(dino_scores['fire'] * 100), percent_ceiling(dino_scores['smoke'] * 100),
+                 percent_ceiling(dino_scores['lights'] * 100), percent_ceiling(dino_scores['clouds'] * 100),
                  round(candidates[0]['dino']['threshold'], 3),
                  cached['vlm_result'] if cached else None, cached['vlm_answer'] if cached else None,
                  photo_urls[0], photo_urls[1], photo_urls[2]),
@@ -643,7 +672,7 @@ def inspect_video(source_path, result_path, confidence_threshold=0.40):
         'total_frames': total_frames,
         'duration_seconds': round(processed_frames / fps, 1),
         'alert_frames': alert_frames,
-        'max_alert_confidence': round(max_alert_confidence * 100, 1),
+        'max_alert_confidence': percent_ceiling(max_alert_confidence * 100),
         'class_counts': class_counts,
         'has_alert': alert_frames > 0,
     }
@@ -665,6 +694,7 @@ def generate_inspection_stream(job):
     class_counts = {'cloud': 0, 'fire': 0, 'light': 0, 'smoke': 0}
     alert_frames = 0
     max_alert_confidence = 0.0
+    class_confidences = {'fire': None, 'smoke': None}
     processed_frames = 0
     event_candidates = []
     active_events = []
@@ -688,6 +718,7 @@ def generate_inspection_stream(job):
                 )[0]
                 frame_has_alert = False
                 frame_confidence = 0.0
+                frame_scores = {'fire': None, 'smoke': None}
                 detected_labels = set()
                 alert_centers = []
                 alert_boxes = []
@@ -699,12 +730,15 @@ def generate_inspection_stream(job):
                         detected_labels.add(label)
                         class_counts[label] = class_counts.get(label, 0) + 1
                         if label in {'fire', 'smoke'}:
+                            frame_scores[label] = max(frame_scores[label] or 0, confidence * 100)
+                            class_confidences[label] = max(class_confidences[label] or 0, confidence * 100)
                             frame_has_alert = True
                             frame_confidence = max(frame_confidence, confidence)
                             max_alert_confidence = max(max_alert_confidence, confidence)
                             x1, y1, x2, y2 = box.xyxy[0].tolist()
                             alert_centers.append(((x1 + x2) / (2 * width), (y1 + y2) / (2 * height)))
                             alert_boxes.append((x1, y1, x2, y2))
+                job['yolo_scores'] = {name: percent_ceiling(value) if value is not None else None for name, value in frame_scores.items()}
                 if frame_has_alert:
                     alert_frames += 1
                 video_second = processed_frames / fps
@@ -739,6 +773,9 @@ def generate_inspection_stream(job):
                         matched_event = min(nearby, key=lambda event: (event['center'][0] - center[0]) ** 2 + (event['center'][1] - center[1]) ** 2)
                         matched_event['last_seen_second'] = video_second
                         matched_event['detection_count'] += 1
+                        for name, value in frame_scores.items():
+                            if value is not None:
+                                matched_event.setdefault('yolo_scores', {})[name] = max(matched_event.get('yolo_scores', {}).get(name) or 0, value)
                         matched_event['max_confidence'] = max(matched_event['max_confidence'], frame_confidence)
                         matched_event['center'] = (matched_event['center'][0] * .8 + center[0] * .2, matched_event['center'][1] * .8 + center[1] * .2)
                         if video_second - matched_event['last_db_update_second'] >= 1.0:
@@ -761,6 +798,7 @@ def generate_inspection_stream(job):
                         'frame_index': processed_frames,
                         'video_second': video_second,
                         'confidence': frame_confidence,
+                        'yolo_scores': dict(job['yolo_scores']),
                         'frame': frame.copy(),
                         'center': center,
                         'dino': dino,
@@ -774,7 +812,8 @@ def generate_inspection_stream(job):
                         event_id = start_event_verification(job, representative_frames, event_center)
                         active_events.append({'event_id': event_id, 'center': event_center, 'last_seen_second': video_second,
                                               'last_db_update_second': video_second, 'detection_count': 5,
-                                              'max_confidence': frame_confidence})
+                                              'max_confidence': frame_confidence,
+                                              'yolo_scores': {name: max((item['yolo_scores'][name] for item in representative_frames if item['yolo_scores'][name] is not None), default=None) for name in ('fire', 'smoke')}})
                         event_candidates = []
                 elif matched_event is not None:
                     event_candidates = []
@@ -813,6 +852,8 @@ def generate_inspection_stream(job):
         converted.replace(result_path)
         job['report'] = {
             'filename': job['original_name'],
+            'vlm_prompt_mode': job.get('vlm_prompt_mode', 'fixed'),
+            'vlm_prompt_version': job.get('vlm_prompt_version', VLM_PROMPT_VERSION),
             'detection_mode': job.get('detection_mode', 'or'),
             'yolo_threshold': job.get('yolo_threshold', 40),
             'source_url': job.get('source_url'),
@@ -820,8 +861,9 @@ def generate_inspection_stream(job):
             'total_frames': total_frames,
             'duration_seconds': round(processed_frames / fps, 1),
             'alert_frames': alert_frames,
-            'max_alert_confidence': round(max_alert_confidence * 100, 1),
+            'max_alert_confidence': percent_ceiling(max_alert_confidence * 100),
             'class_counts': class_counts,
+            'class_confidences': {name: percent_ceiling(value) if value is not None else None for name, value in class_confidences.items()},
             'has_alert': alert_frames > 0,
             'result_name': result_path.name,
             'event_ids': job['event_ids'],
@@ -872,7 +914,7 @@ def load_recent_events():
                       e.detection_count, e.video_started_seconds, e.video_last_seen_seconds,
                       e.dino_fire_score, e.dino_smoke_score, e.dino_light_score, e.dino_cloud_score,
                       e.dino_threshold, e.dino_passed, e.yolo_candidate_count, e.dino_pass_count,
-                      e.evidence_names,
+                      e.evidence_names, e.event_hashes,
                       l.english_answer, l.korean_translation, l.translation_status, l.request_history,
                       u.username AS accepted_by_username,
                       m.human_verdict, m.human_notes, m.labeled_at,
@@ -886,6 +928,11 @@ def load_recent_events():
         )
         events = cursor.fetchall()
         for event in events:
+            try:
+                metadata = json.loads(event.get('event_hashes') or '{}')
+                event['yolo_scores'] = metadata.get('yolo_scores', {}) if isinstance(metadata, dict) else {}
+            except (TypeError, json.JSONDecodeError):
+                event['yolo_scores'] = {}
             try:
                 names = json.loads(event['evidence_names'] or '[]')
             except (TypeError, json.JSONDecodeError):
@@ -943,6 +990,7 @@ def home():
         'home.html', user=user, report=session.get('last_report'),
         job_token=job_token, events=events,
         current_job=inspection_jobs.get(job_token, {}),
+        fixed_vlm_prompt=VLM_PROMPT, fixed_vlm_version=VLM_PROMPT_VERSION,
     )
 
 
@@ -956,6 +1004,7 @@ def inspect():
         abort(400)
     try:
         yolo_threshold = parse_yolo_threshold(request.form)
+        prompt_mode, selected_prompt, selected_version = select_vlm_prompt(request.form)
     except ValueError as exc:
         flash(str(exc))
         return redirect(url_for('home'))
@@ -1002,6 +1051,9 @@ def inspect():
         upload.save(source_path)
     inspection_jobs[token] = {
         'token': token,
+        'vlm_prompt_mode': prompt_mode,
+        'vlm_prompt': selected_prompt,
+        'vlm_prompt_version': selected_version,
         'user_id': session['user_id'],
         'source_path': source_path,
         'result_path': result_path,
@@ -1062,6 +1114,7 @@ def inspection_status(token):
     return jsonify(
         status=job['status'], progress=job['progress'], error=job['error'],
         stop_requested=job.get('stop_requested', False),
+        yolo_scores=job.get('yolo_scores', {}),
         vlm_feedback=feedback(job), pending_vlm=job['pending_vlm'],
     )
 
@@ -1159,29 +1212,7 @@ def event_evidence(event_id, filename):
 
 @app.route('/signup', methods=['GET', 'POST'])
 def signup():
-    error = None
-    if request.method == 'POST':
-        username = request.form.get('username', '').strip()
-        password = request.form.get('password', '')
-        if not re.fullmatch(r'[A-Za-z0-9_]{3,100}', username):
-            error = '아이디는 영문, 숫자, 밑줄로 3~100자 입력해 주세요.'
-        elif not 8 <= len(password) <= 128:
-            error = '비밀번호는 8~128자로 입력해 주세요.'
-        elif password != request.form.get('password_confirm', ''):
-            error = '비밀번호 확인이 일치하지 않습니다.'
-        else:
-            hashed = generate_password_hash(password, method='scrypt')
-            try:
-                with get_db().cursor() as cursor:
-                    cursor.execute('INSERT INTO `user` (username, password_hash, role) VALUES (%s, %s, %s)', (username, hashed, 'USER'))
-            except pymysql.err.IntegrityError as exc:
-                if exc.args[0] != 1062:
-                    raise
-                error = '이미 사용 중인 아이디입니다.'
-            else:
-                flash('회원가입이 완료되었습니다. 로그인해 주세요.')
-                return redirect(url_for('login'))
-    return render_template('auth.html', mode='signup', error=error), 400 if error else 200
+    return render_template('auth.html', mode='login', error='현재 회원가입은 비활성화되어 있습니다.'), 403
 
 
 @app.route('/login', methods=['GET', 'POST'])

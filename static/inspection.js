@@ -30,6 +30,10 @@ if (streamConfig) {
         streamStarted = true;
         image.src = streamConfig.dataset.streamUrl;
       }
+      const scores = job.yolo_scores || {};
+      const scoreText = (name) => scores[name] == null ? '미검출' : `${Number(scores[name]).toFixed(1)}%`;
+      const scoreLine = document.getElementById('yolo-live-scores');
+      if (scoreLine) scoreLine.textContent = `YOLO · 불: ${scoreText('fire')} · 연기: ${scoreText('smoke')}`;
       const state = job.vlm_feedback;
       const labels = {queued:'검증 대기', analyzing:'AI 분석 중', confirmed:'실제 화재/연기', false_alarm:'오탐', uncertain:'육안 확인 필요', error:'분석 오류'};
       if (state) document.getElementById('vlm-live-status').textContent = `EVT-${state.event_id} · VLM ${labels[state.status]}${state.cached ? ' (기존 판정 재사용)' : ''}`;

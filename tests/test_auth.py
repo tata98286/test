@@ -2,7 +2,7 @@ import secrets
 import unittest
 
 from app import app, get_db
-from werkzeug.security import check_password_hash
+from werkzeug.security import check_password_hash, generate_password_hash
 
 
 class AuthFlowTest(unittest.TestCase):
@@ -19,10 +19,15 @@ class AuthFlowTest(unittest.TestCase):
 
         try:
             self.assertEqual(client.get('/').status_code, 302)
-            self.assertEqual(client.get('/signup').status_code, 200)
+            self.assertEqual(client.get('/signup').status_code, 403)
             self.assertEqual(client.post('/signup', data={}).status_code, 400)
-            self.assertEqual(post('/signup', username=username, password=password, password_confirm='mismatch').status_code, 400)
-            self.assertEqual(post('/signup', username=username, password=password, password_confirm=password, role='ADMIN').status_code, 302)
+            self.assertEqual(post('/signup', username=username, password=password, password_confirm='mismatch').status_code, 403)
+            self.assertEqual(post('/signup', username=username, password=password, password_confirm=password, role='ADMIN').status_code, 403)
+            with app.app_context():
+                with get_db().cursor() as cursor:
+                    cursor.execute('SELECT COUNT(*) AS count FROM `user` WHERE username=%s', (username,))
+                    self.assertEqual(cursor.fetchone()['count'], 0)
+                    cursor.execute('INSERT INTO `user` (username, password_hash, role) VALUES (%s,%s,%s)', (username, generate_password_hash(password, method='scrypt'), 'USER'))
             with app.app_context():
                 with get_db().cursor() as cursor:
                     cursor.execute('SELECT * FROM `user` WHERE username=%s', (username,))
@@ -31,7 +36,7 @@ class AuthFlowTest(unittest.TestCase):
             self.assertNotEqual(user['password_hash'], password)
             self.assertTrue(user['password_hash'].startswith('scrypt:'))
             self.assertTrue(check_password_hash(user['password_hash'], password))
-            self.assertEqual(post('/signup', username=username, password=password, password_confirm=password).status_code, 400)
+            self.assertEqual(post('/signup', username=username, password=password, password_confirm=password).status_code, 403)
             self.assertEqual(post('/login', username=username, password='wrong').status_code, 401)
             self.assertEqual(post('/login', username="' OR 1=1 --", password=password).status_code, 401)
             self.assertEqual(post('/login', username=username, password=password).status_code, 302)
