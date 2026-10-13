@@ -22,7 +22,7 @@ if (promptDialog) {
     mode.value = choice;
     value.value = choice === 'test' ? draft.value.trim() : '';
     try { localStorage.setItem(storageKey, draft.value); } catch (_) {}
-    label.textContent = `VLM · ${choice === 'test' ? '테스트 프롬프트 (다음 검사에 적용)' : '고정 프롬프트'}`;
+    label.textContent = choice === 'test' ? '테스트' : '고정';
     promptDialog.close();
   });
   if (running) {

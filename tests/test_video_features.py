@@ -12,10 +12,10 @@ from vlm_display import overlay, STATES
 
 class VideoFeaturesTest(unittest.TestCase):
     def test_yolo_threshold_accepts_only_presentation_presets(self):
-        for value in ('40', '70', '90'):
+        for value in ('40', '70', '80'):
             self.assertEqual(module.parse_yolo_threshold({'yolo_threshold': value}), int(value))
         self.assertEqual(module.parse_yolo_threshold({}), 40)
-        for value in ('', '41', '100', 'abc'):
+        for value in ('', '41', '90', '100', 'abc'):
             with self.assertRaises(ValueError):
                 module.parse_yolo_threshold({'yolo_threshold': value})
 

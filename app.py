@@ -62,7 +62,7 @@ EVENT_END_QUIET_SECONDS = 30.0
 EVENT_LOCATION_DISTANCE = 0.20
 DINO_MODEL_PATH = Path(os.getenv('DINO_MODEL_PATH', r'C:\its\model\full_crop_gate_multilabel.pt'))
 HUMAN_VERDICTS = {'FIRE', 'FALSE_ALARM', 'UNCERTAIN'}
-YOLO_THRESHOLDS = {40, 70, 90}
+YOLO_THRESHOLDS = {40, 70, 80}
 
 
 
@@ -117,9 +117,9 @@ def parse_yolo_threshold(form):
     try:
         threshold = int(form.get('yolo_threshold', '40'))
     except (TypeError, ValueError):
-        raise ValueError('YOLO 신뢰도는 40%, 70%, 90% 중에서 선택해 주세요.')
+        raise ValueError('YOLO 신뢰도는 40%, 70%, 80% 중에서 선택해 주세요.')
     if threshold not in YOLO_THRESHOLDS:
-        raise ValueError('YOLO 신뢰도는 40%, 70%, 90% 중에서 선택해 주세요.')
+        raise ValueError('YOLO 신뢰도는 40%, 70%, 80% 중에서 선택해 주세요.')
     return threshold
 
 
@@ -699,6 +699,7 @@ def generate_inspection_stream(job):
     event_candidates = []
     active_events = []
     metric_buckets = {}
+    dino_threshold = None
     metric_started = time.perf_counter()
     metric_run_id = start_metric_run(job)
     confidence_threshold = job.get('yolo_threshold', 40) / 100
@@ -749,6 +750,7 @@ def generate_inspection_stream(job):
                 if matches_yolo_condition(detected_labels, job.get('detection_mode', 'or')) and center is not None:
                     with _dino_lock:
                         dino = classify_yolo_crops_with_dino(frame, alert_boxes)
+                    dino_threshold = dino['threshold']
                     second = int(video_second)
                     bucket = metric_buckets.setdefault(second, {
                         'yolo': 0, 'passed': 0, 'blocked': 0, 'yolo_score': 0.0,
@@ -864,6 +866,12 @@ def generate_inspection_stream(job):
             'max_alert_confidence': percent_ceiling(max_alert_confidence * 100),
             'class_counts': class_counts,
             'class_confidences': {name: percent_ceiling(value) if value is not None else None for name, value in class_confidences.items()},
+            'dino_summary': {
+                'evaluated': bool(metric_buckets),
+                'passed': any(bucket['passed'] > 0 for bucket in metric_buckets.values()),
+                'threshold': percent_ceiling(dino_threshold * 100) if dino_threshold is not None else None,
+                'scores': {name: percent_ceiling(max((bucket[name] for bucket in metric_buckets.values()), default=0)) for name in ('fire', 'smoke')},
+            },
             'has_alert': alert_frames > 0,
             'result_name': result_path.name,
             'event_ids': job['event_ids'],
